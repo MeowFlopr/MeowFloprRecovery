@@ -367,6 +367,9 @@ pub struct DrmDisplay {
     prop_p1_fb: u32,
     brightness: i32,
     power_on: bool,
+    crtc_id: u32,
+    conn_id: u32,
+    mode: DrmModeModeInfo,
 }
 
 impl DrmDisplay {
@@ -750,6 +753,9 @@ impl DrmDisplay {
             prop_p1_fb,
             brightness: 2500,
             power_on: true,
+            crtc_id,
+            conn_id: active_conn_id,
+            mode: active_mode,
         })
     }
 
@@ -819,6 +825,22 @@ impl DrmDisplay {
         };
         unsafe {
             let _ = libc::ioctl(fd, DRM_IOCTL_MODE_DIRTYFB, &mut dirty);
+        }
+
+        let conn_id = self.conn_id;
+        let mut set_crtc = DrmModeCrtc {
+            set_connectors_ptr: &conn_id as *const _ as usize as u64,
+            count_connectors: 1,
+            crtc_id: self.crtc_id,
+            fb_id: self.fb_id,
+            x: 0,
+            y: 0,
+            gamma_size: 0,
+            mode_valid: 1,
+            mode: self.mode,
+        };
+        unsafe {
+            libc::ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &mut set_crtc);
         }
 
         let mut req = AtomicRequest::new();
