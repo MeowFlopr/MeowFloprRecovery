@@ -1,6 +1,89 @@
-# Аппаратное шифрование MT6897 и MrR Companion / MT6897 Hardware Encryption & MrR Companion
+# MT6897 Hardware Encryption & MrR Companion / Аппаратное шифрование MT6897 и MrR Companion
 
-[🇷🇺 Русский](#-русский) | [🇬🇧 English](#-english)
+[🇬🇧 English](#-english) | [🇷🇺 Русский](#-русский)
+
+---
+
+## 🇬🇧 English
+
+This document provides a detailed technical breakdown of user data encryption on the MediaTek Dimensity 8300-Ultra (MT6897) SoC running HyperOS (Android 14+), explaining why classic TWRP approaches fail and how the MrR Companion subsystem resolves this challenge.
+
+### 1. The TEE and KeyMint 3.0 Hardware Barrier
+
+Starting with Android 13/14 on recent MediaTek platforms, user data encryption keys are sealed inside a hardware-isolated Trusted Execution Environment powered by Microtrust Mitee and KeyMint 3.0.
+
+#### Root of Trust (RoT) Sealing Mechanism
+
+1. During standard system boot (HyperOS), the bootloader measures the boot state and passes signed parameters to the TEE: OS version, security patch level, boot key hash, and bootloader lock state.
+2. The TEE validates this Root of Trust (RoT) state and permits the `android.hardware.security.keymint` HAL to unseal the master Credential Encrypted (CE) and Device Encrypted (DE) keys.
+3. In recovery mode, the verified boot environment is fundamentally different: the kernel runs in a separate context, and vendor framework services are offline.
+4. Consequently, the Microtrust Mitee TEE rejects any decryption requests originating from custom recovery. Spawning stock KeyMint and vold binaries inside a recovery ramdisk results in binder timeouts, service crashes, and authentication failure.
+
+### 2. Multi-Layer Storage Encryption in Xiaomi 14T
+
+Storage security on `degas` uses a two-tier encryption stack:
+
+1. Block-Level Encryption:
+   - The underlying partition `/dev/block/by-name/userdata` is managed via the Linux device-mapper `dm-default-key` target.
+   - Algorithm: AES-256-XTS with MediaTek hardware cryptographic engine offload.
+   - Without active dm mapping, the `f2fs` filesystem on `userdata` cannot be mounted.
+
+2. Filesystem-Level Encryption (FBE v2):
+   - F2FS leverages the Linux kernel `fscrypt` v2 interface.
+   - Individual inodes and directories are encrypted with keys derived from master credentials.
+   - If the corresponding master key is not present in the Linux kernel keyring via `FS_IOC_ADD_ENCRYPTION_KEY`, filenames appear as base64 ciphertext hashes (e.g., `0cvusgAAAAD2hKZ...`), and file read operations fail with `EKEYREVOKED` or return ciphertext.
+
+### 3. MrR Companion Architecture
+
+To overcome the TEE RoT restriction without disabling encryption or requiring data formatting, MeowFloprRecovery implements the MrR Companion subsystem.
+
+#### Operating Sequence
+
+1. Key Acquisition in Authorized Context:
+   - While booted into HyperOS, the hardware TEE has already validated the RoT and released master keys into authorized kernel data structures.
+   - The MrR Companion service, executing with root privileges, extracts the active 128-character hex block key via `dmsetup table --showkeys userdata` and the CE master key descriptor.
+
+2. Persistence in Non-Volatile Storage:
+   - Extracted keys are written to `/mnt/vendor/persist/mrr/userdata.key` with restrictive permissions (`0600`).
+   - The `persist` partition (`/dev/block/by-name/persist`) is an ext4 partition dedicated to hardware calibration, sensor data, and vendor flags. It is never wiped during Factory Reset / Wipe Data operations and is readily accessible during early recovery startup.
+
+3. Autonomous Decryption in MeowFloprRecovery:
+   - On startup, MrR mounts `/dev/block/by-name/persist` to `/mnt/vendor/persist`.
+   - It reads `/mnt/vendor/persist/mrr/userdata.key`.
+   - Configures the device-mapper target using `ioctl(DM_TABLE_LOAD)` with the `default-key` module.
+   - Mounts the mapped block device `/dev/block/mapper/userdata` to `/data`.
+   - Reads the CE master key and registers it in the Linux kernel keyring using:
+     ```c
+     ioctl(fd, FS_IOC_ADD_ENCRYPTION_KEY, &key_spec);
+     ```
+   - The Linux kernel instantly resolves directory trees: `/sdcard` folders (`Download`, `DCIM`, `Documents`) become readable as plaintext.
+
+### 4. Subsystem Components
+
+1. `MrRCompanion.apk`:
+   - Lightweight standalone native Android application.
+   - Provides a one-tap key synchronization button, hardware security state inspector, and boot service installer.
+
+2. Magisk / KernelSU / APatch Module (`mrr-companion.zip`):
+   - Installs a startup script at `/data/adb/modules/mrr-companion/service.sh`.
+   - Automatically synchronizes updated keys to `/mnt/vendor/persist/mrr/` on every boot once `sys.boot_completed=1`.
+   - Ensures transparent key updates across firmware updates and PIN modifications.
+
+3. Embedded Assets in MrR Binary:
+   - The Companion APK and Magisk module are embedded directly inside the compiled `mrr` binary via `include_bytes!`.
+   - Can be exported from the recovery UI to `/sdcard/MRR/` or `/persist/` at any time with a single tap.
+
+### 5. Manual Key Entry & Skip Fallbacks
+
+If the device was formatted and the companion module was not yet installed:
+
+- Enter the screen lock PIN for local key derivation via Scrypt/PBKDF2.
+- Input a raw 128-character hexadecimal key via the on-screen keyboard.
+- Skip decryption entirely ("Отмена / Cancel") to perform system partition repairs, flashing, or raw block backups.
+
+### Feedback
+
+For technical discussions or questions regarding storage cryptography, open an Issue or contact the developer on Telegram: https://t.me/kotvava.
 
 ---
 
@@ -86,86 +169,3 @@
 ### Обратная связь
 
 При вопросах по работе криптографического движка открывайте Issue на GitHub либо обращайтесь в Telegram: https://t.me/kotvava.
-
----
-
-## 🇬🇧 English
-
-This document provides a detailed breakdown of user data encryption on the MediaTek Dimensity 8300-Ultra (MT6897) SoC running HyperOS (Android 14+), explaining why classic TWRP approaches fail and how the MrR Companion subsystem resolves this challenge.
-
-### 1. The TEE and KeyMint 3.0 Hardware Barrier
-
-Starting with Android 13/14 on recent MediaTek platforms, user data encryption keys are sealed inside a hardware-isolated Trusted Execution Environment powered by Microtrust Mitee and KeyMint 3.0.
-
-#### Root of Trust (RoT) Sealing Mechanism
-
-1. During standard system boot (HyperOS), the bootloader measures the boot state and passes signed parameters to the TEE: OS version, security patch level, boot key hash, and bootloader lock state.
-2. The TEE validates this Root of Trust (RoT) state and permits the `android.hardware.security.keymint` HAL to unseal the master Credential Encrypted (CE) and Device Encrypted (DE) keys.
-3. In recovery mode, the verified boot environment is fundamentally different: the kernel runs in a separate context, and vendor framework services are offline.
-4. Consequently, the Microtrust Mitee TEE rejects any decryption requests originating from custom recovery. Spawning stock KeyMint and vold binaries inside a recovery ramdisk results in binder timeouts, service crashes, and authentication failure.
-
-### 2. Multi-Layer Storage Encryption in Xiaomi 14T
-
-Storage security on `degas` uses a two-tier encryption stack:
-
-1. Block-Level Encryption:
-   - The underlying partition `/dev/block/by-name/userdata` is managed via the Linux device-mapper `dm-default-key` target.
-   - Algorithm: AES-256-XTS with MediaTek hardware cryptographic engine offload.
-   - Without active dm mapping, the `f2fs` filesystem on `userdata` cannot be mounted.
-
-2. Filesystem-Level Encryption (FBE v2):
-   - F2FS leverages the Linux kernel `fscrypt` v2 interface.
-   - Individual inodes and directories are encrypted with keys derived from master credentials.
-   - If the corresponding master key is not present in the Linux kernel keyring via `FS_IOC_ADD_ENCRYPTION_KEY`, filenames appear as base64 ciphertext hashes (e.g., `0cvusgAAAAD2hKZ...`), and file read operations fail with `EKEYREVOKED` or return ciphertext.
-
-### 3. MrR Companion Architecture
-
-To overcome the TEE RoT restriction without disabling encryption or requiring data formatting, MeowFloprRecovery implements the MrR Companion subsystem.
-
-#### Operating Sequence
-
-1. Key Acquisition in Authorized Context:
-   - While booted into HyperOS, the hardware TEE has already validated the RoT and released master keys into authorized kernel data structures.
-   - The MrR Companion service, executing with root privileges, extracts the active 128-character hex block key via `dmsetup table --showkeys userdata` and the CE master key descriptor.
-
-2. Persistence in Non-Volatile Storage:
-   - Extracted keys are written to `/mnt/vendor/persist/mrr/userdata.key` with restrictive permissions (`0600`).
-   - The `persist` partition (`/dev/block/by-name/persist`) is an ext4 partition dedicated to hardware calibration, sensor data, and vendor flags. It is never wiped during Factory Reset / Wipe Data operations and is readily accessible during early recovery startup.
-
-3. Autonomous Decryption in MeowFloprRecovery:
-   - On startup, MrR mounts `/dev/block/by-name/persist` to `/mnt/vendor/persist`.
-   - It reads `/mnt/vendor/persist/mrr/userdata.key`.
-   - Configures the device-mapper target using `ioctl(DM_TABLE_LOAD)` with the `default-key` module.
-   - Mounts the mapped block device `/dev/block/mapper/userdata` to `/data`.
-   - Reads the CE master key and registers it in the Linux kernel keyring using:
-     ```c
-     ioctl(fd, FS_IOC_ADD_ENCRYPTION_KEY, &key_spec);
-     ```
-   - The Linux kernel instantly resolves directory trees: `/sdcard` folders (`Download`, `DCIM`, `Documents`) become readable as plaintext.
-
-### 4. Subsystem Components
-
-1. `MrRCompanion.apk`:
-   - Lightweight standalone native Android application.
-   - Provides a one-tap key synchronization button, hardware security state inspector, and boot service installer.
-
-2. Magisk / KernelSU / APatch Module (`mrr-companion.zip`):
-   - Installs a startup script at `/data/adb/modules/mrr-companion/service.sh`.
-   - Automatically synchronizes updated keys to `/mnt/vendor/persist/mrr/` on every boot once `sys.boot_completed=1`.
-   - Ensures transparent key updates across firmware updates and PIN modifications.
-
-3. Embedded Assets in MrR Binary:
-   - The Companion APK and Magisk module are embedded directly inside the compiled `mrr` binary via `include_bytes!`.
-   - Can be exported from the recovery UI to `/sdcard/MRR/` or `/persist/` at any time with a single tap.
-
-### 5. Manual Key Entry & Skip Fallbacks
-
-If the device was formatted and the companion module was not yet installed:
-
-- Enter the screen lock PIN for local key derivation via Scrypt/PBKDF2.
-- Input a raw 128-character hexadecimal key via the on-screen keyboard.
-- Skip decryption entirely ("Отмена / Cancel") to perform system partition repairs, flashing, or raw block backups.
-
-### Feedback
-
-For technical discussions or questions regarding storage cryptography, open an Issue or contact the developer on Telegram: https://t.me/kotvava.
