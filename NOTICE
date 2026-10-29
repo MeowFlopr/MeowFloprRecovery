@@ -1,0 +1,63 @@
+MeowFloprRecovery (MrR)
+Copyright 2026 MeowFlopr Project & Contributors
+
+This product includes software developed by the MeowFlopr Project
+(https://github.com/MeowFlopr/MeowFloprRecovery).
+
+Contact: https://t.me/kotvava
+
+========================================================================
+Third-Party Software and Attributions
+========================================================================
+
+This project includes or depends on the following open-source software
+components, licensed under their respective terms:
+
+1. tiny-skia (https://github.com/RazrFalcon/tiny-skia)
+   Copyright (c) 2020 Yevhenii Reizner
+   Licensed under Apache License, Version 2.0 or MIT License.
+
+2. fontdue (https://github.com/mooman219/fontdue)
+   Copyright (c) 2020 Jari Vetoniemi
+   Licensed under MIT License or Apache License, Version 2.0.
+
+3. libc crate (https://github.com/rust-lang/libc)
+   Copyright (c) 2014-2026 The Rust Project Developers
+   Licensed under MIT License or Apache License, Version 2.0.
+
+4. zip-rs (https://github.com/zip-rs/zip2)
+   Copyright (c) 2021-2026 zip-rs contributors
+   Licensed under MIT License.
+
+5. Roboto Font and Material Symbols
+   Copyright (c) Google LLC
+   Licensed under Apache License, Version 2.0.
+
+6. Android Open Source Project (AOSP) & Linux Kernel DRM KMS ABI
+   Copyright (c) The Android Open Source Project & The Linux Kernel Organization
+   Licensed under Apache License, Version 2.0 / GPL-2.0 WITH Linux-syscall-note.
+
+7. Device Tree and GKI Partition Layout Research for Xiaomi 14T (degas)
+   Advnirr (https://github.com/Advnirr/twrp_device_xiaomi_degas)
+   Licensed under Apache License, Version 2.0.
+
+========================================================================
+🇷🇺 Уведомление об авторских правах и сторонних компонентах
+========================================================================
+
+MeowFloprRecovery (MrR)
+Авторские права 2026 MeowFlopr Project & Contributors
+
+Данный продукт включает программное обеспечение, разработанное проектом
+MeowFlopr (https://github.com/MeowFlopr/MeowFloprRecovery).
+
+Обратная связь и связь с разработчиком: https://t.me/kotvava
+
+В состав проекта входят либо используются компоненты со следующими лицензиями:
+1. tiny-skia — Apache-2.0 / MIT (Yevhenii Reizner)
+2. fontdue — Apache-2.0 / MIT (Jari Vetoniemi)
+3. libc crate — Apache-2.0 / MIT (The Rust Project Developers)
+4. zip-rs — MIT (zip-rs contributors)
+5. Шрифты Roboto и символы Material Symbols — Apache-2.0 (Google LLC)
+6. Интерфейсы ядра Linux DRM KMS и спецификации AOSP — Apache-2.0 / GPL-2.0
+7. Исследования разметки GKI и дерева устройств Xiaomi 14T (degas) — Advnirr (Apache-2.0)
