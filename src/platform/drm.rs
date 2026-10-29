@@ -172,6 +172,19 @@ struct DrmModeAtomic {
 }
 
 #[repr(C)]
+struct DrmModeCrtc {
+    set_connectors_ptr: u64,
+    count_connectors: u32,
+    crtc_id: u32,
+    fb_id: u32,
+    x: u32,
+    y: u32,
+    gamma_size: u32,
+    mode_valid: u32,
+    mode: DrmModeModeInfo,
+}
+
+#[repr(C)]
 struct DrmModeFbDirtyCmd {
     fb_id: u32,
     flags: u32,
@@ -184,6 +197,7 @@ const DRM_IOCTL_SET_MASTER: libc::c_int = _io(0x1e);
 const DRM_IOCTL_SET_CLIENT_CAP: libc::c_int = _iow::<DrmSetClientCap>(0x0d);
 const DRM_IOCTL_MODE_GETRESOURCES: libc::c_int = _iowr::<DrmModeCardRes>(0xa0);
 const DRM_IOCTL_MODE_GETCONNECTOR: libc::c_int = _iowr::<DrmModeGetConnector>(0xa7);
+const DRM_IOCTL_MODE_SETCRTC: libc::c_int = _iowr::<DrmModeCrtc>(0xa2);
 const DRM_IOCTL_MODE_CREATE_DUMB: libc::c_int = _iowr::<DrmModeCreateDumb>(0xb2);
 const DRM_IOCTL_MODE_MAP_DUMB: libc::c_int = _iowr::<DrmModeMapDumb>(0xb3);
 const DRM_IOCTL_MODE_DESTROY_DUMB: libc::c_int = _iowr::<DrmModeDestroyDumb>(0xb4);
@@ -685,11 +699,35 @@ impl DrmDisplay {
             req.add_property(plane1_id, p1_crtc_h, height as u64);
         }
 
+        let conn_id_u32 = active_conn_id;
+        let mut set_crtc = DrmModeCrtc {
+            set_connectors_ptr: &conn_id_u32 as *const _ as usize as u64,
+            count_connectors: 1,
+            crtc_id,
+            fb_id,
+            x: 0,
+            y: 0,
+            gamma_size: 0,
+            mode_valid: 1,
+            mode: active_mode,
+        };
+        let setcrtc_ok = unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &mut set_crtc) == 0 };
+        if setcrtc_ok {
+            println!("[MRR-DISPLAY] DRM_IOCTL_MODE_SETCRTC modeset successful!");
+        } else {
+            let err = unsafe { *libc::__errno_location() };
+            eprintln!("[MRR-DISPLAY] DRM_IOCTL_MODE_SETCRTC returned errno {} ({})", err, std::io::Error::from_raw_os_error(err));
+        }
+
         match req.commit(fd, DRM_MODE_ATOMIC_ALLOW_MODESET) {
             Ok(_) => println!("[MRR-DISPLAY] Atomic modeset commit successful!"),
             Err(e) => {
-                eprintln!("[MRR-DISPLAY] Atomic modeset commit failed with errno {} ({})", e, std::io::Error::from_raw_os_error(e));
-                return Err("Atomic modeset commit failed");
+                if setcrtc_ok {
+                    println!("[MRR-DISPLAY] Atomic commit returned {}, but SETCRTC is active. Continuing with hardware modeset.", e);
+                } else {
+                    eprintln!("[MRR-DISPLAY] Atomic modeset commit failed with errno {} ({})", e, std::io::Error::from_raw_os_error(e));
+                    return Err("Modeset initialization failed");
+                }
             }
         }
 
