@@ -1,0 +1,6 @@
+id=mrr-companion
+name=MeowFloprRecovery (MRR) Companion
+version=v2.4
+versionCode=240
+author=MeowFlopr
+description=Automatically syncs unique FBE hardware encryption keys to persist partition on boot for MeowFloprRecovery.

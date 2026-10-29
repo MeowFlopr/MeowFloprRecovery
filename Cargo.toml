@@ -1,0 +1,22 @@
+[package]
+name = "mrr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+tiny-skia = "0.11"
+fontdue = "0.9"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+crc32fast = "1.4"
+
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
