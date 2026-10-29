@@ -241,38 +241,25 @@ impl AtomicRequest {
 
         let mut objs: Vec<u32> = Vec::with_capacity(self.objects.len());
         let mut count_props: Vec<u32> = Vec::with_capacity(self.objects.len());
-        let mut props_storage: Vec<Vec<u32>> = Vec::with_capacity(self.objects.len());
-        let mut values_storage: Vec<Vec<u64>> = Vec::with_capacity(self.objects.len());
+        let mut props: Vec<u32> = Vec::new();
+        let mut prop_values: Vec<u64> = Vec::new();
 
         for (obj_id, prop_pairs) in &self.objects {
             objs.push(*obj_id);
             count_props.push(prop_pairs.len() as u32);
-            let mut p_vec = Vec::with_capacity(prop_pairs.len());
-            let mut v_vec = Vec::with_capacity(prop_pairs.len());
             for (p, v) in prop_pairs {
-                p_vec.push(*p);
-                v_vec.push(*v);
+                props.push(*p);
+                prop_values.push(*v);
             }
-            props_storage.push(p_vec);
-            values_storage.push(v_vec);
         }
-
-        let mut props_ptrs: Vec<u64> = props_storage
-            .iter()
-            .map(|v| v.as_ptr() as usize as u64)
-            .collect();
-        let mut values_ptrs: Vec<u64> = values_storage
-            .iter()
-            .map(|v| v.as_ptr() as usize as u64)
-            .collect();
 
         let mut req = DrmModeAtomic {
             flags,
             count_objs,
             objs_ptr: objs.as_ptr() as usize as u64,
             count_props_ptr: count_props.as_ptr() as usize as u64,
-            props_ptr: props_ptrs.as_mut_ptr() as usize as u64,
-            prop_values_ptr: values_ptrs.as_mut_ptr() as usize as u64,
+            props_ptr: props.as_ptr() as usize as u64,
+            prop_values_ptr: prop_values.as_ptr() as usize as u64,
             reserved: 0,
             user_data: 0,
         };
@@ -421,10 +408,15 @@ impl DrmDisplay {
             return Err("Zero connectors or CRTCs found on DRM card");
         }
 
-        let mut connector_ids = vec![0u32; res.count_connectors as usize];
+        let mut fb_ids = vec![0u32; res.count_fbs as usize];
         let mut crtc_ids = vec![0u32; res.count_crtcs as usize];
-        res.connector_id_ptr = connector_ids.as_mut_ptr() as usize as u64;
+        let mut connector_ids = vec![0u32; res.count_connectors as usize];
+        let mut encoder_ids = vec![0u32; res.count_encoders as usize];
+
+        res.fb_id_ptr = fb_ids.as_mut_ptr() as usize as u64;
         res.crtc_id_ptr = crtc_ids.as_mut_ptr() as usize as u64;
+        res.connector_id_ptr = connector_ids.as_mut_ptr() as usize as u64;
+        res.encoder_id_ptr = encoder_ids.as_mut_ptr() as usize as u64;
 
         if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &mut res) } != 0 {
             return Err("Failed to read connector IDs");
@@ -460,7 +452,14 @@ impl DrmDisplay {
 
             if conn_info.connection == DRM_MODE_CONNECTED && conn_info.count_modes > 0 {
                 let mut modes = vec![DrmModeModeInfo::default(); conn_info.count_modes as usize];
+                let mut props = vec![0u32; conn_info.count_props as usize];
+                let mut prop_vals = vec![0u64; conn_info.count_props as usize];
+                let mut encoders = vec![0u32; conn_info.count_encoders as usize];
+
                 conn_info.modes_ptr = modes.as_mut_ptr() as usize as u64;
+                conn_info.props_ptr = props.as_mut_ptr() as usize as u64;
+                conn_info.prop_values_ptr = prop_vals.as_mut_ptr() as usize as u64;
+                conn_info.encoders_ptr = encoders.as_mut_ptr() as usize as u64;
 
                 if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &mut conn_info) } == 0 {
                     active_conn_id = conn_id;
@@ -596,6 +595,21 @@ impl DrmDisplay {
         let p0_crtc_w = find_property(fd, plane0_id, DRM_MODE_OBJECT_PLANE, "CRTC_W");
         let p0_crtc_h = find_property(fd, plane0_id, DRM_MODE_OBJECT_PLANE, "CRTC_H");
 
+        let prop_p1_fb = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "FB_ID");
+        let p1_crtc = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+        let p1_src_x = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_X");
+        let p1_src_y = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_Y");
+        let p1_src_w = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_W");
+        let p1_src_h = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_H");
+        let p1_crtc_x = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_X");
+        let p1_crtc_y = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
+        let p1_crtc_w = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_W");
+        let p1_crtc_h = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+
+        println!("[MRR-DISPLAY] conn_id: {}, crtc_id: {}, mode_blob: {}, plane0: {}, plane1: {}",
+            active_conn_id, crtc_id, mode_blob_id, plane0_id, plane1_id);
+        println!("[MRR-DISPLAY] Props: conn_crtc: {}, crtc_active: {}, crtc_mode: {}, p0_fb: {}, p1_fb: {}",
+            prop_conn_crtc, prop_crtc_active, prop_crtc_mode, prop_p0_fb, prop_p1_fb);
         let half_w = width / 2;
 
         let mut req = AtomicRequest::new();
@@ -640,17 +654,6 @@ impl DrmDisplay {
             req.add_property(plane0_id, p0_crtc_h, height as u64);
         }
 
-        let prop_p1_fb = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "FB_ID");
-        let p1_crtc = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
-        let p1_src_x = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_X");
-        let p1_src_y = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_Y");
-        let p1_src_w = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_W");
-        let p1_src_h = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "SRC_H");
-        let p1_crtc_x = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_X");
-        let p1_crtc_y = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
-        let p1_crtc_w = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_W");
-        let p1_crtc_h = find_property(fd, plane1_id, DRM_MODE_OBJECT_PLANE, "CRTC_H");
-
         if prop_p1_fb != 0 {
             req.add_property(plane1_id, prop_p1_fb, fb_id as u64);
         }
@@ -682,8 +685,12 @@ impl DrmDisplay {
             req.add_property(plane1_id, p1_crtc_h, height as u64);
         }
 
-        if let Err(_) = req.commit(fd, DRM_MODE_ATOMIC_ALLOW_MODESET) {
-            return Err("Atomic modeset commit failed");
+        match req.commit(fd, DRM_MODE_ATOMIC_ALLOW_MODESET) {
+            Ok(_) => println!("[MRR-DISPLAY] Atomic modeset commit successful!"),
+            Err(e) => {
+                eprintln!("[MRR-DISPLAY] Atomic modeset commit failed with errno {} ({})", e, std::io::Error::from_raw_os_error(e));
+                return Err("Atomic modeset commit failed");
+            }
         }
 
         write_backlight_level(2500);
