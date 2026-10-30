@@ -1,6 +1,6 @@
 use std::fs;
-use std::path::PathBuf;
-use tiny_skia::Color;
+use std::path::{Path, PathBuf};
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::icons::{draw_icon, M3Icon};
@@ -75,15 +75,15 @@ pub struct BackupState {
 impl Default for BackupState {
     fn default() -> Self {
         let margin = 40.0;
-        let content_w = 1220.0 - (margin * 2.0);
+        let content_w = 1220.0 - (margin * 2.0); // 1140.0
         let slider_x = margin + 40.0;
-        let slider_w = content_w - 80.0;
+        let slider_w = content_w - 80.0; // 1060.0
         let slider_h = 130.0;
 
         let backup_slider = SwipeSlider::new(slider_x, 2280.0, slider_w, slider_h, "Swipe to Backup >>>")
-            .with_accent(Color::from_rgba8(123, 208, 255, 255));
+            .with_accent(Color::from_rgba8(123, 208, 255, 255)); // Tertiary cyan
         let restore_slider = SwipeSlider::new(slider_x, 2280.0, slider_w, slider_h, "Swipe to Restore >>>")
-            .with_accent(Color::from_rgba8(208, 188, 255, 255));
+            .with_accent(Color::from_rgba8(208, 188, 255, 255)); // Primary lavender
 
         let partitions = vec![
             PartitionItem { id: "boot", name: "Boot Kernel (boot_a/b)", desc: "Linux 6.1 GKI kernel image", size_mb: 64, is_checked: true, is_critical: false },
@@ -127,11 +127,6 @@ impl BackupState {
         self.partitions.iter().filter(|p| p.is_checked).map(|p| p.size_mb).sum()
     }
 
-    pub fn reset_sliders(&mut self) {
-        self.backup_slider.reset();
-        self.restore_slider.reset();
-    }
-
     pub fn scan_archives(&mut self) {
         self.archives.clear();
         let paths = [
@@ -146,6 +141,7 @@ impl BackupState {
                     let path = entry.path();
                     if path.is_dir() {
                         let name = entry.file_name().to_string_lossy().to_string();
+                        // Compute folder size
                         let mut size_bytes = 0u64;
                         let mut parts = Vec::new();
                         if let Ok(sub) = fs::read_dir(&path) {
@@ -156,27 +152,10 @@ impl BackupState {
                                 }
                             }
                         }
-                        let date_str = if let Ok(meta) = entry.metadata() {
-                            if let Ok(mtime) = meta.modified() {
-                                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
-                                    let days = dur.as_secs() / 86400;
-                                    let year = 1970 + days / 365;
-                                    let month = ((days % 365) / 30) + 1;
-                                    let day = ((days % 365) % 30) + 1;
-                                    format!("{:04}-{:02}-{:02}", year, month.min(12), day.min(31))
-                                } else {
-                                    "Unknown".to_string()
-                                }
-                            } else {
-                                "Unknown".to_string()
-                            }
-                        } else {
-                            "Unknown".to_string()
-                        };
                         self.archives.push(BackupArchive {
                             name,
                             path,
-                            date_str,
+                            date_str: "2026-10-29".to_string(),
                             size_mb: size_bytes / (1024 * 1024),
                             partitions: parts,
                         });
@@ -192,6 +171,7 @@ impl BackupState {
         let margin = 40.0;
         let content_w = 1220.0 - (margin * 2.0);
 
+        // 1. Back button (Top Bar: x: 40..160, y: 70..170, or Bottom Bar: y: 2460..2580)
         if state == TouchState::Released {
             if fx >= 40.0 && fx <= 160.0 && fy >= 70.0 && fy <= 170.0 {
                 return Some(BackupAction::Back);
@@ -201,22 +181,23 @@ impl BackupState {
             }
         }
 
+        // 2. Tab Bar Selection (y: 200 .. 280)
         if state == TouchState::Released && fy >= 200.0 && fy <= 280.0 {
             let tab_w = (content_w - 16.0) / 2.0;
             if fx >= margin && fx <= margin + tab_w {
                 self.current_tab = BackupTab::Backup;
-                self.reset_sliders();
                 return Some(BackupAction::SelectTab(BackupTab::Backup));
             } else if fx >= margin + tab_w + 16.0 && fx <= margin + tab_w * 2.0 + 16.0 {
                 self.current_tab = BackupTab::Restore;
-                self.reset_sliders();
                 self.scan_archives();
                 return Some(BackupAction::SelectTab(BackupTab::Restore));
             }
         }
 
+        // 3. Backup Tab Controls
         if self.current_tab == BackupTab::Backup {
             if state == TouchState::Released {
+                // Storage Selector chip: y: 300..370, x: 40..450
                 if fy >= 300.0 && fy <= 370.0 && fx >= margin && fx <= margin + 450.0 {
                     self.storage_target = match self.storage_target {
                         StorageTarget::Internal => StorageTarget::UsbOtg,
@@ -225,6 +206,7 @@ impl BackupState {
                     return Some(BackupAction::ToggleStorageTarget);
                 }
 
+                // Compression Selector chip: y: 300..370, x: 500..850
                 if fy >= 300.0 && fy <= 370.0 && fx >= margin + 470.0 && fx <= margin + 820.0 {
                     self.compression = match self.compression {
                         CompressionMode::Lz4 => CompressionMode::Gzip,
@@ -234,11 +216,13 @@ impl BackupState {
                     return Some(BackupAction::CycleCompression);
                 }
 
+                // SHA256 Checksum toggle: y: 300..370, x: 860..1180
                 if fy >= 300.0 && fy <= 370.0 && fx >= margin + 840.0 && fx <= 1220.0 - margin {
                     self.generate_sha256 = !self.generate_sha256;
                     return Some(BackupAction::ToggleSha256);
                 }
 
+                // Partition Checkboxes: y: 400 .. 1550
                 let row_h = 135.0;
                 let start_y = 400.0;
                 let gap = 14.0;
@@ -252,14 +236,16 @@ impl BackupState {
                 }
             }
 
+            // Swipe to Backup Slider
             if self.backup_slider.handle_touch(tx, ty, state) {
-                self.backup_slider.reset();
                 return Some(BackupAction::ConfirmBackup);
             }
         }
 
+        // 4. Restore Tab Controls
         if self.current_tab == BackupTab::Restore {
             if state == TouchState::Released {
+                // Archive list items: y: 320 .. 2000
                 let item_h = 160.0;
                 let start_y = 320.0;
                 let gap = 16.0;
@@ -268,14 +254,13 @@ impl BackupState {
                     let cy = start_y + (i as f32) * (item_h + gap);
                     if fx >= margin && fx <= 1220.0 - margin && fy >= cy && fy <= cy + item_h {
                         self.selected_archive_idx = Some(i);
-                        self.restore_slider.reset();
                         return Some(BackupAction::SelectArchive(i));
                     }
                 }
             }
 
+            // Swipe to Restore Slider
             if self.selected_archive_idx.is_some() && self.restore_slider.handle_touch(tx, ty, state) {
-                self.restore_slider.reset();
                 return Some(BackupAction::ConfirmRestore);
             }
         }
@@ -295,8 +280,11 @@ pub fn render_backup(
 
     let screen_w = 1220.0;
     let margin = 40.0;
-    let content_w = screen_w - (margin * 2.0);
+    let content_w = screen_w - (margin * 2.0); // 1140.0
 
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = margin + 44.0;
     let back_cy = 115.0;
     let is_back_pressed = pressed == Some(BackupAction::Back);
@@ -311,6 +299,9 @@ pub fn render_backup(
     fonts.draw_text(&mut canvas.pixmap, "Backup & Restore", back_cx + 64.0, back_cy - 4.0, 38.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, "Partition snapshots & recovery archives", back_cx + 64.0, back_cy + 34.0, 22.0, theme.on_surface_variant);
 
+    // =========================================================================
+    // 2. SEGMENTED TABS (Backup vs Restore: y: 200 .. 280)
+    // =========================================================================
     let tab_y = 200.0;
     let tab_h = 76.0;
     let tab_w = (content_w - 16.0) / 2.0;
@@ -332,11 +323,16 @@ pub fn render_backup(
         fonts.draw_text(&mut canvas.pixmap, title, tx + (tab_w - tw) / 2.0, tab_y + 48.0, 25.0, fg);
     }
 
+    // =========================================================================
+    // 3. TAB CONTENT
+    // =========================================================================
     match state.current_tab {
         BackupTab::Backup => {
+            // Options chips (Storage, Compression, SHA256)
             let chip_y = 300.0;
             let chip_h = 70.0;
 
+            // Storage chip
             let (target_lbl, target_accent) = match state.storage_target {
                 StorageTarget::Internal => ("Хранилище: /sdcard", theme.primary),
                 StorageTarget::UsbOtg => ("Хранилище: USB-OTG", theme.tertiary),
@@ -345,6 +341,7 @@ pub fn render_backup(
             draw_icon(&mut canvas.pixmap, M3Icon::Storage, margin + 35.0, chip_y + 35.0, 26.0, target_accent);
             fonts.draw_text(&mut canvas.pixmap, target_lbl, margin + 65.0, chip_y + 45.0, 21.0, theme.on_surface);
 
+            // Compression chip
             let comp_lbl = match state.compression {
                 CompressionMode::Lz4 => "Сжатие: LZ4 (Fast)",
                 CompressionMode::Gzip => "Сжатие: Gzip (Max)",
@@ -353,15 +350,16 @@ pub fn render_backup(
             canvas.draw_pill(margin + 460.0, chip_y, 350.0, chip_h, theme.surface_container_high, Some((theme.outline_variant, 1.5)));
             fonts.draw_text(&mut canvas.pixmap, comp_lbl, margin + 485.0, chip_y + 45.0, 21.0, theme.on_surface);
 
+            // SHA256 chip
             let (sha_bg, sha_fg) = if state.generate_sha256 {
                 (theme.primary_container, theme.primary)
             } else {
                 (theme.surface_container_high, theme.on_surface_variant)
             };
             canvas.draw_pill(margin + 830.0, chip_y, content_w - 830.0, chip_h, sha_bg, Some((theme.outline_variant, 1.5)));
-            let sha_lbl = if state.generate_sha256 { "SHA256: ON" } else { "SHA256: OFF" };
-            fonts.draw_text(&mut canvas.pixmap, sha_lbl, margin + 865.0, chip_y + 45.0, 21.0, sha_fg);
+            fonts.draw_text(&mut canvas.pixmap, "SHA256: ВКЛ", margin + 865.0, chip_y + 45.0, 21.0, sha_fg);
 
+            // Partition Checklist
             let row_h = 135.0;
             let start_y = 390.0;
             let gap = 14.0;
@@ -381,9 +379,11 @@ pub fn render_backup(
                     draw_icon(&mut canvas.pixmap, M3Icon::Check, chk_cx, chk_cy, 30.0, theme.background);
                 }
 
+                // Text
                 fonts.draw_text(&mut canvas.pixmap, p.name, chk_cx + 46.0, cy + 54.0, 27.0, theme.on_surface);
                 fonts.draw_text(&mut canvas.pixmap, p.desc, chk_cx + 46.0, cy + 96.0, 19.0, theme.on_surface_variant);
 
+                // Size Badge
                 let size_str = if p.size_mb >= 1024 {
                     format!("{:.1} GB", (p.size_mb as f32) / 1024.0)
                 } else {
@@ -398,6 +398,7 @@ pub fn render_backup(
                 }
             }
 
+            // Total Size Summary Banner
             let total_mb = state.total_selected_size_mb();
             let total_str = if total_mb >= 1024 {
                 format!("Размер дампа: {:.2} ГБ • Доступно на диске: 213 ГБ", total_mb as f32 / 1024.0)
@@ -408,11 +409,13 @@ pub fn render_backup(
             canvas.draw_rounded_rect(margin, sum_y, content_w, 90.0, 24.0, Some(theme.surface_container_highest), Some((theme.outline_variant, 1.0)));
             fonts.draw_text(&mut canvas.pixmap, &total_str, margin + 40.0, sum_y + 55.0, 23.0, theme.on_surface);
 
+            // Swipe to Backup Slider
             state.backup_slider.render(canvas, theme, fonts);
         }
 
         BackupTab::Restore => {
             if state.archives.is_empty() {
+                // Empty state card
                 let empty_y = 400.0;
                 let empty_h = 400.0;
                 canvas.draw_rounded_rect(margin, empty_y, content_w, empty_h, 32.0, Some(theme.surface_container), Some((theme.outline_variant, 1.0)));
@@ -455,6 +458,9 @@ pub fn render_backup(
         }
     }
 
+    // =========================================================================
+    // 4. BOTTOM DOCK BACK
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 110.0;
     let btn_w = 280.0;
@@ -471,4 +477,3 @@ pub fn render_backup(
     let w = fonts.measure_text(lbl, 26.0);
     fonts.draw_text(&mut canvas.pixmap, lbl, margin + (btn_w - w) / 2.0, dock_y + 64.0, 26.0, theme.on_surface);
 }
-

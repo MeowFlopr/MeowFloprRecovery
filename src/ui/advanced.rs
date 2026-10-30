@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::i18n::Language;
@@ -59,9 +59,11 @@ pub struct AdvancedState {
     pub detected_root: String,
     pub status_message: String,
     pub active_slot: String,
+    // File Manager
     pub fm_path: PathBuf,
     pub fm_entries: Vec<FmEntry>,
     pub selected_file: Option<FmEntry>,
+    // Dmesg Viewer
     pub dmesg_lines: Vec<String>,
     pub dmesg_scroll_offset: usize,
     pub is_dragging_dmesg: bool,
@@ -188,6 +190,7 @@ impl AdvancedState {
         let fy = ty as f32;
         let margin = 40.0;
 
+        // Dmesg drag scrolling
         if self.subscreen == AdvancedSubScreen::DmesgViewer {
             if fy >= 200.0 && fy <= 2400.0 && fx >= margin && fx <= 1220.0 - margin {
                 match state {
@@ -222,6 +225,7 @@ impl AdvancedState {
         }
 
         if state == TouchState::Released {
+            // 1. Back button
             if fx >= 40.0 && fx <= 160.0 && fy >= 70.0 && fy <= 170.0 {
                 if self.subscreen != AdvancedSubScreen::Menu {
                     self.subscreen = AdvancedSubScreen::Menu;
@@ -304,6 +308,7 @@ impl AdvancedState {
                         let btn_h = 90.0;
                         let bw = 240.0;
 
+                        // chmod 0755
                         if fy >= btn_y && fy <= btn_y + btn_h && fx >= margin + 40.0 && fx <= margin + 40.0 + bw {
                             let _ = fs::set_permissions(&sel.path, fs::Permissions::from_mode(0o755));
                             self.status_message = "chmod 0755 applied".to_string();
@@ -312,6 +317,7 @@ impl AdvancedState {
                             return Some(AdvancedAction::ChmodSelected(0o755));
                         }
 
+                        // chmod 0644
                         let c2_x = margin + 40.0 + bw + 20.0;
                         if fy >= btn_y && fy <= btn_y + btn_h && fx >= c2_x && fx <= c2_x + bw {
                             let _ = fs::set_permissions(&sel.path, fs::Permissions::from_mode(0o644));
@@ -321,6 +327,7 @@ impl AdvancedState {
                             return Some(AdvancedAction::ChmodSelected(0o644));
                         }
 
+                        // Delete
                         let del_x = c2_x + bw + 20.0;
                         if fy >= btn_y && fy <= btn_y + btn_h && fx >= del_x && fx <= del_x + bw {
                             if sel.is_dir {
@@ -334,6 +341,7 @@ impl AdvancedState {
                             return Some(AdvancedAction::DeleteSelected);
                         }
 
+                        // Cancel / Close modal
                         let cl_y = btn_y + 110.0;
                         if fy >= cl_y && fy <= cl_y + 80.0 {
                             self.selected_file = None;
@@ -360,11 +368,14 @@ impl AdvancedState {
                 }
 
                 AdvancedSubScreen::DmesgViewer => {
+                    // Top Refresh button: x: 1040..1180, y: 70..170
                     if fx >= 1040.0 && fx <= 1180.0 && fy >= 70.0 && fy <= 170.0 {
                         self.refresh_dmesg();
                         return Some(AdvancedAction::DmesgRefresh);
                     }
+                    // Bottom dock scroll controls: y: 2460..2580
                     if fy >= 2460.0 && fy <= 2580.0 {
+                        // Scroll Up: x: 380..740
                         if fx >= 380.0 && fx <= 740.0 {
                             let total = self.dmesg_lines.len();
                             if self.dmesg_scroll_offset + 30 < total {
@@ -372,6 +383,7 @@ impl AdvancedState {
                             }
                             return Some(AdvancedAction::DmesgScrollUp);
                         }
+                        // Scroll Down: x: 760..1180
                         if fx >= 760.0 && fx <= 1180.0 {
                             self.dmesg_scroll_offset = self.dmesg_scroll_offset.saturating_sub(30);
                             return Some(AdvancedAction::DmesgScrollDown);
@@ -398,6 +410,9 @@ pub fn render_advanced(
     let margin = 40.0;
     let content_w = screen_w - (margin * 2.0);
 
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = margin + 44.0;
     let back_cy = 115.0;
     canvas.draw_circle(back_cx, back_cy, 44.0, theme.surface_container_high);
@@ -422,6 +437,7 @@ pub fn render_advanced(
     fonts.draw_text(&mut canvas.pixmap, title, back_cx + 64.0, back_cy - 4.0, 38.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, sub, back_cx + 64.0, back_cy + 34.0, 22.0, theme.on_surface_variant);
 
+    // Refresh button if in Dmesg Viewer
     if state.subscreen == AdvancedSubScreen::DmesgViewer {
         let clr_w = 150.0;
         let clr_x = screen_w - margin - clr_w;
@@ -434,6 +450,9 @@ pub fn render_advanced(
         fonts.draw_text(&mut canvas.pixmap, ref_lbl, clr_x + (clr_w - rw) / 2.0, 120.0, 22.0, theme.primary);
     }
 
+    // =========================================================================
+    // 2. SUBSCREEN CONTENT
+    // =========================================================================
     match state.subscreen {
         AdvancedSubScreen::Menu => {
             let cards = match lang {
@@ -474,6 +493,7 @@ pub fn render_advanced(
         }
 
         AdvancedSubScreen::RootManager => {
+            // Status hero card
             let hero_y = 200.0;
             let hero_h = 140.0;
             canvas.draw_rounded_rect(margin, hero_y, content_w, hero_h, 28.0, Some(theme.surface_container_high), Some((theme.primary, 1.5)));
@@ -490,6 +510,7 @@ pub fn render_advanced(
             fonts.draw_text(&mut canvas.pixmap, status_lbl, icx + 60.0, hero_y + 54.0, 24.0, theme.on_surface_variant);
             fonts.draw_text(&mut canvas.pixmap, &state.detected_root, icx + 60.0, hero_y + 98.0, 30.0, theme.primary);
 
+            // Action Cards
             let r_cards = match lang {
                 Language::English => [
                     ("Backup Stock Boot Partition", "Dump active boot/init_boot to /sdcard/MRR/stock_boot.img", theme.secondary),
@@ -520,11 +541,13 @@ pub fn render_advanced(
         }
 
         AdvancedSubScreen::FileManager => {
+            // Path breadcrumb bar
             let p_y = 195.0;
             canvas.draw_pill(margin, p_y, content_w, 64.0, theme.surface_container_high, Some((theme.outline_variant, 1.0)));
             let path_str = state.fm_path.to_string_lossy();
             fonts.draw_text(&mut canvas.pixmap, &path_str, margin + 30.0, p_y + 42.0, 22.0, theme.primary);
 
+            // Items list: y: 280 .. 2350
             let item_h = 110.0;
             let start_y = 280.0;
             let gap = 12.0;
@@ -542,6 +565,7 @@ pub fn render_advanced(
                 fonts.draw_text(&mut canvas.pixmap, &mode_str, margin + 85.0, cy + 86.0, 19.0, theme.on_surface_variant);
             }
 
+            // File Details & Chmod Modal if a file is tapped
             if let Some(ref sel) = state.selected_file {
                 let m_y = 800.0;
                 let m_h = 600.0;
@@ -555,17 +579,21 @@ pub fn render_advanced(
                 let perm_str = format!("Mode: 0{:o} • Size: {}", sel.mode, sel.size_str);
                 fonts.draw_text(&mut canvas.pixmap, &perm_str, margin + 50.0, m_y + 190.0, 25.0, theme.on_surface);
 
+                // Quick buttons: chmod 0755, chmod 0644, Delete
                 let btn_y = m_y + 260.0;
                 let btn_h = 80.0;
                 let bw = 240.0;
 
+                // chmod 0755
                 canvas.draw_pill(margin + 50.0, btn_y, bw, btn_h, theme.primary, None);
                 fonts.draw_text(&mut canvas.pixmap, "chmod 0755", margin + 85.0, btn_y + 50.0, 22.0, theme.on_primary);
 
+                // chmod 0644
                 let c2_x = margin + 50.0 + bw + 20.0;
                 canvas.draw_pill(c2_x, btn_y, bw, btn_h, theme.surface_container_high, Some((theme.outline_variant, 1.5)));
                 fonts.draw_text(&mut canvas.pixmap, "chmod 0644", c2_x + 35.0, btn_y + 50.0, 22.0, theme.on_surface);
 
+                // Delete
                 let del_x = c2_x + bw + 20.0;
                 canvas.draw_pill(del_x, btn_y, bw, btn_h, theme.error_container, Some((theme.error, 1.5)));
                 let del_lbl = match lang {
@@ -574,6 +602,7 @@ pub fn render_advanced(
                 };
                 fonts.draw_text(&mut canvas.pixmap, del_lbl, del_x + 55.0, btn_y + 50.0, 22.0, theme.error);
 
+                // Close
                 let cl_y = btn_y + 110.0;
                 canvas.draw_pill(margin + 50.0, cl_y, content_w - 100.0, 70.0, theme.surface_container_high, Some((theme.outline_variant, 1.0)));
                 let cl_lbl = match lang {
@@ -585,6 +614,7 @@ pub fn render_advanced(
         }
 
         AdvancedSubScreen::DmesgViewer => {
+            // Dmesg terminal box: y: 200 .. 2420
             let d_y = 200.0;
             let d_h = 2220.0;
             canvas.draw_rounded_rect(
@@ -622,6 +652,9 @@ pub fn render_advanced(
         }
     }
 
+    // =========================================================================
+    // 3. BOTTOM DOCK
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 110.0;
     let btn_w = 300.0;

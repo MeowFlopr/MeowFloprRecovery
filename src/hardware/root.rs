@@ -1,10 +1,17 @@
+//! Automated Root Engine (Magisk, KernelSU, SukiSU)
+//! Automatically extracts magiskboot, unpacks active boot/init_boot, patches ramdisk,
+//! repacks, and writes the verified patched image to the hardware boot block device.
+
 use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::hardware::ProgressCallback;
 
+/// Discovers or extracts magiskboot tool from system or APKs in /sdcard/Download/
 pub fn resolve_magiskboot() -> Option<PathBuf> {
+    // 1. Check existing system/bin binaries
     let standard_paths = [
         "/system/bin/magiskboot",
         "/sbin/magiskboot",
@@ -16,6 +23,7 @@ pub fn resolve_magiskboot() -> Option<PathBuf> {
         }
     }
 
+    // 2. Scan /sdcard/Download for Magisk / SukiSU APK and extract libmagiskboot.so
     let download_dir = Path::new("/sdcard/Download");
     if let Ok(entries) = fs::read_dir(download_dir) {
         for entry in entries.flatten() {
@@ -33,11 +41,9 @@ pub fn resolve_magiskboot() -> Option<PathBuf> {
                                 let dest = PathBuf::from("/tmp/magiskboot");
                                 if let Ok(mut out) = File::create(&dest) {
                                     if std::io::copy(&mut src, &mut out).is_ok() {
-                                        if let Ok(meta) = fs::metadata(&dest) {
-                                            let mut perms = meta.permissions();
-                                            perms.set_mode(0o755);
-                                            let _ = fs::set_permissions(&dest, perms);
-                                        }
+                                        let mut perms = fs::metadata(&dest).unwrap().permissions();
+                                        perms.set_mode(0o755);
+                                        let _ = fs::set_permissions(&dest, perms);
                                         println!("[MRR-ROOT] Extracted magiskboot from {:?}", path);
                                         return Some(dest);
                                     }
@@ -53,12 +59,14 @@ pub fn resolve_magiskboot() -> Option<PathBuf> {
     None
 }
 
+/// Installs KernelSU / SukiSU root to active partition
 pub fn install_sukisu_root(
     active_slot: &str,
     progress: &mut dyn ProgressCallback,
 ) -> Result<(), String> {
     progress.step("Scanning storage for KernelSU / SukiSU patched image...", 0.15);
 
+    // 1. Search for pre-patched image created by ReSukiSU or KernelSU Manager app
     let search_dirs = [
         Path::new("/sdcard/Download"),
         Path::new("/sdcard/MRR"),
@@ -100,6 +108,7 @@ pub fn install_sukisu_root(
         return Ok(());
     }
 
+    // 2. If no patched image found, export stock init_boot so user can patch in app
     let init_blk = crate::resolve_partition_block("init_boot", active_slot);
     if let Some(blk) = init_blk {
         let export_path = Path::new("/sdcard/Download/init_boot.img");
@@ -113,12 +122,14 @@ pub fn install_sukisu_root(
     Err("No patched image found in /sdcard/Download/! Open ReSukiSU in Android -> Select /sdcard/Download/init_boot.img -> Patch, then run this again or flash via Install menu.".to_string())
 }
 
+/// Installs Magisk root to active boot or init_boot partition
 pub fn install_magisk_root(
     active_slot: &str,
     progress: &mut dyn ProgressCallback,
 ) -> Result<(), String> {
     progress.step("Locating Magisk package in storage...", 0.15);
 
+    // Search for Magisk APK or ZIP in /sdcard/Download or /sdcard
     let search_dirs = [
         Path::new("/sdcard/Download"),
         Path::new("/sdcard"),
@@ -151,12 +162,14 @@ pub fn install_magisk_root(
     progress.log(&format!("[+] Found Magisk package: {:?}", pkg_path));
     progress.step("Executing official Magisk installer...", 0.35);
 
+    // Run official Magisk update-binary installer
     crate::hardware::installer::install_zip_package(&pkg_path, active_slot, progress)?;
     progress.step("Magisk root installed successfully! Reboot system.", 1.0);
     progress.log("[OK] Magisk successfully patched active boot and installed binaries.");
     Ok(())
 }
 
+/// Restores stock boot or init_boot partition to remove root
 pub fn restore_stock_boot(
     active_slot: &str,
     progress: &mut dyn ProgressCallback,

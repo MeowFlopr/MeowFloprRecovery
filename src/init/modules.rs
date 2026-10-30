@@ -42,6 +42,7 @@ pub fn load_kernel_module(path: &str) -> Result<(), std::io::Error> {
 pub fn init_touch_hardware() {
     println!("[MRR-INIT] Initializing Xiaomi 14T touch subsystem hardware...");
 
+    // 1. Try loading patched touch module if present
     let module_candidates = [
         "/lib/modules/xiaomi_touch_common.ko",
         "/vendor/lib/modules/xiaomi_touch_common.ko",
@@ -56,6 +57,7 @@ pub fn init_touch_hardware() {
         }
     }
 
+    // 2. Setup sysfs controls for Xiaomi 14T AMOLED touch panel
     if Path::new("/sys/class/touch/touch_dev/enable_touch_raw").exists() {
         let _ = fs::write("/sys/class/touch/touch_dev/enable_touch_raw", "0");
         println!("[MRR-INIT] Configured enable_touch_raw=0");

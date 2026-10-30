@@ -72,21 +72,22 @@ fn hex(rgba: u32) -> Color {
 }
 
 impl M3Theme {
+    /// Authentic Material 3 Expressive (Lavender / Indigo signature tone)
     pub fn expressive_dark() -> Self {
         Self {
-            background: hex(0x0a0b10ff),
-            surface: hex(0x101217ff),
-            surface_container_low: hex(0x14161eff),
-            surface_container: hex(0x191c26ff),
-            surface_container_high: hex(0x222633ff),
+            background: hex(0x0a0b10ff),               // Pure deep AMOLED background
+            surface: hex(0x101217ff),                  // Base surface
+            surface_container_low: hex(0x14161eff),    // Elevation 1
+            surface_container: hex(0x191c26ff),        // Distinct elevated card background
+            surface_container_high: hex(0x222633ff),   // Highlighted / Active
             surface_container_highest: hex(0x2c3242ff),
-            primary: hex(0xd0bcffff),
-            primary_container: hex(0x3d2c6cff),
+            primary: hex(0xd0bcffff),                  // M3 Lavender Accent
+            primary_container: hex(0x3d2c6cff),        // Soft container tone
             on_primary: hex(0x21005dff),
             on_primary_container: hex(0xeaddffff),
             secondary: hex(0xccc2dcff),
             secondary_container: hex(0x352f44ff),
-            tertiary: hex(0x7bd0ffff),
+            tertiary: hex(0x7bd0ffff),                 // Soft Cyan
             tertiary_container: hex(0x003d58ff),
             error: hex(0xffb4abff),
             error_container: hex(0x561515ff),
@@ -115,13 +116,13 @@ impl M3Theme {
             surface_container: hex(0x142219ff),
             surface_container_high: hex(0x1c2e22ff),
             surface_container_highest: hex(0x263c2eff),
-            primary: hex(0x6ddba2ff),
+            primary: hex(0x6ddba2ff),                  // Radiant Mint / Emerald
             primary_container: hex(0x005234ff),
             on_primary: hex(0x003822ff),
             on_primary_container: hex(0x89f8beff),
             secondary: hex(0xb3ccbfff),
             secondary_container: hex(0x1e3a2cff),
-            tertiary: hex(0x7dd2e4ff),
+            tertiary: hex(0x7dd2e4ff),                 // Aquatic Cyan
             tertiary_container: hex(0x004d5aff),
             error: hex(0xffb4abff),
             error_container: hex(0x561515ff),
@@ -140,13 +141,13 @@ impl M3Theme {
             surface_container: hex(0x271c13ff),
             surface_container_high: hex(0x35271aff),
             surface_container_highest: hex(0x443223ff),
-            primary: hex(0xffb77bff),
+            primary: hex(0xffb77bff),                  // Sunset Amber
             primary_container: hex(0x623300ff),
             on_primary: hex(0x452200ff),
             on_primary_container: hex(0xffdcc1ff),
             secondary: hex(0xe0c0a9ff),
             secondary_container: hex(0x463527ff),
-            tertiary: hex(0xffb4a9ff),
+            tertiary: hex(0xffb4a9ff),                 // Coral
             tertiary_container: hex(0x680009ff),
             error: hex(0xffb4abff),
             error_container: hex(0x561515ff),
@@ -165,13 +166,13 @@ impl M3Theme {
             surface_container: hex(0x16162aff),
             surface_container_high: hex(0x20203dff),
             surface_container_highest: hex(0x2d2d54ff),
-            primary: hex(0x00f0ffff),
+            primary: hex(0x00f0ffff),                  // Electric Cyan
             primary_container: hex(0x00474dff),
             on_primary: hex(0x001f22ff),
             on_primary_container: hex(0x7df7ffff),
-            secondary: hex(0xff2a85ff),
+            secondary: hex(0xff2a85ff),                // Neon Pink
             secondary_container: hex(0x520025ff),
-            tertiary: hex(0xffe600ff),
+            tertiary: hex(0xffe600ff),                 // Neon Volt Yellow
             tertiary_container: hex(0x474000ff),
             error: hex(0xff4455ff),
             error_container: hex(0x660011ff),
@@ -187,7 +188,7 @@ pub struct M3Shapes {
     pub corner_small: f32,
     pub corner_medium: f32,
     pub corner_large: f32,
-    pub corner_card: f32,
+    pub corner_card: f32,      // Refined 22.0dp as requested (between 20..24dp)
     pub corner_full: f32,
 }
 
@@ -197,8 +198,8 @@ impl Default for M3Shapes {
             corner_small: 8.0,
             corner_medium: 14.0,
             corner_large: 18.0,
-            corner_card: 22.0,
-            corner_full: 9999.0,
+            corner_card: 22.0,        // 22dp: Tight, clean, modern
+            corner_full: 9999.0,      // Full pill
         }
     }
 }

@@ -1,3 +1,7 @@
+//! AOSP Dynamic Partitions (Super / LpMetadata) Parser & dm-linear Device Mapper
+//! Parses Android Virtual A/B super partition metadata and creates block device mappers
+//! for system, vendor, product, system_ext, etc.
+
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::symlink;
@@ -6,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::dm::{DmIoctl, DmTargetSpec};
 
-const LP_METADATA_GEOMETRY_MAGIC: u32 = 0x616c4430;
-const LP_METADATA_HEADER_MAGIC: u32 = 0x414c5030;
+const LP_METADATA_GEOMETRY_MAGIC: u32 = 0x616c4430; // "0Dal"
+const LP_METADATA_HEADER_MAGIC: u32 = 0x414c5030;   // "0PLA"
 const LP_TARGET_TYPE_LINEAR: u32 = 0;
 const LP_TARGET_TYPE_ZERO: u32 = 1;
 
@@ -20,7 +24,7 @@ const DM_READONLY_FLAG: u32 = 1 << 0;
 pub struct PartitionExtent {
     pub num_sectors: u64,
     pub target_type: u32,
-    pub target_data: u64,
+    pub target_data: u64, // sector offset in super
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +33,7 @@ pub struct LogicalPartition {
     pub extents: Vec<PartitionExtent>,
 }
 
+/// Reads and parses logical partitions from /dev/block/by-name/super
 pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, String> {
     if !super_path.exists() {
         return Err(format!("Super block device not found at {:?}", super_path));
@@ -36,6 +41,7 @@ pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, 
 
     let mut file = File::open(super_path).map_err(|e| format!("Failed to open super: {}", e))?;
 
+    // 1. Read Geometry at offset 4096 (0x1000)
     file.seek(SeekFrom::Start(4096))
         .map_err(|e| format!("Seek to geometry failed: {}", e))?;
     let mut geom_buf = [0u8; 4096];
@@ -58,6 +64,7 @@ pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, 
         metadata_max_size, metadata_slot_count
     );
 
+    // 2. Read Primary Metadata Header (located at 0x1000 + 4096 = 8192)
     let meta_offset = 8192u64;
     file.seek(SeekFrom::Start(meta_offset))
         .map_err(|e| format!("Seek to metadata slot failed: {}", e))?;
@@ -77,19 +84,32 @@ pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, 
     let header_size = u32::from_le_bytes([meta_buf[8], meta_buf[9], meta_buf[10], meta_buf[11]]) as usize;
     let tables_offset = header_size;
 
+    // Table descriptors in LpMetadataHeader (AOSP v10.0+):
+    // Partitions descriptor: offset 80: offset (4 bytes), num_entries (4 bytes), entry_size (4 bytes)
     let part_tbl_offset = u32::from_le_bytes([meta_buf[80], meta_buf[81], meta_buf[82], meta_buf[83]]) as usize;
     let part_tbl_count = u32::from_le_bytes([meta_buf[84], meta_buf[85], meta_buf[86], meta_buf[87]]) as usize;
     let part_entry_size = u32::from_le_bytes([meta_buf[88], meta_buf[89], meta_buf[90], meta_buf[91]]) as usize;
 
+    // Extents descriptor: offset 92: offset (4 bytes), num_entries (4 bytes), entry_size (4 bytes)
     let ext_tbl_offset = u32::from_le_bytes([meta_buf[92], meta_buf[93], meta_buf[94], meta_buf[95]]) as usize;
     let ext_tbl_count = u32::from_le_bytes([meta_buf[96], meta_buf[97], meta_buf[98], meta_buf[99]]) as usize;
     let ext_entry_size = u32::from_le_bytes([meta_buf[100], meta_buf[101], meta_buf[102], meta_buf[103]]) as usize;
 
+    println!(
+        "[MRR-SUPER] Partitions table: count={}, entry_size={}, offset={}",
+        part_tbl_count, part_entry_size, part_tbl_offset
+    );
+    println!(
+        "[MRR-SUPER] Extents table: count={}, entry_size={}, offset={}",
+        ext_tbl_count, ext_entry_size, ext_tbl_offset
+    );
+
+    // Parse Extents
     let mut extents = Vec::new();
     let ext_base = tables_offset + ext_tbl_offset;
     for i in 0..ext_tbl_count {
         let off = ext_base + i * ext_entry_size;
-        if off + 20 <= meta_buf.len() {
+        if off + 24 <= meta_buf.len() {
             let num_sectors = u64::from_le_bytes(meta_buf[off..off + 8].try_into().unwrap());
             let target_type = u32::from_le_bytes(meta_buf[off + 8..off + 12].try_into().unwrap());
             let target_data = u64::from_le_bytes(meta_buf[off + 12..off + 20].try_into().unwrap());
@@ -101,6 +121,7 @@ pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, 
         }
     }
 
+    // Parse Partitions
     let mut partitions = Vec::new();
     let part_base = tables_offset + part_tbl_offset;
     for i in 0..part_tbl_count {
@@ -136,6 +157,10 @@ pub fn parse_super_metadata(super_path: &Path) -> Result<Vec<LogicalPartition>, 
 }
 
 pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExtent]) -> Result<PathBuf, String> {
+    map_dm_linear_mode(part_name, super_path, extents, false)
+}
+
+pub fn map_dm_linear_mode(part_name: &str, super_path: &str, extents: &[PartitionExtent], read_only: bool) -> Result<PathBuf, String> {
     let mapper_path = format!("/dev/block/mapper/{}", part_name);
     if Path::new(&mapper_path).exists() {
         return Ok(PathBuf::from(mapper_path));
@@ -167,6 +192,21 @@ pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExte
         }
     }
 
+    let mut table_str = String::new();
+    let mut current_sector = 0u64;
+
+    for ext in extents {
+        if ext.target_type == LP_TARGET_TYPE_LINEAR {
+            table_str.push_str(&format!(
+                "{} {} linear {} {}\n",
+                current_sector, ext.num_sectors, super_path, ext.target_data
+            ));
+        } else if ext.target_type == LP_TARGET_TYPE_ZERO {
+            table_str.push_str(&format!("{} {} zero\n", current_sector, ext.num_sectors));
+        }
+        current_sector += ext.num_sectors;
+    }
+
     let mut total_size = std::mem::size_of::<DmIoctl>();
     for ext in extents {
         let param = if ext.target_type == LP_TARGET_TYPE_LINEAR {
@@ -179,7 +219,8 @@ pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExte
     }
 
     let mut buf = vec![0u8; total_size];
-    let io_load = DmIoctl::new(part_name, DM_READONLY_FLAG, total_size);
+    let flags = if read_only { DM_READONLY_FLAG } else { 0 };
+    let io_load = DmIoctl::new(part_name, flags, total_size);
 
     unsafe {
         std::ptr::copy_nonoverlapping(
@@ -242,6 +283,7 @@ pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExte
         }
     }
 
+    // 3. DM_DEV_SUSPEND (Resume / Activate)
     let mut io_resume = DmIoctl::new(part_name, 0, std::mem::size_of::<DmIoctl>());
     let ret = unsafe { libc::ioctl(dm_fd, DM_DEV_SUSPEND as _, &mut io_resume) };
     if ret < 0 {
@@ -254,49 +296,23 @@ pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExte
         println!("[MRR-SUPER] Activated dynamic partition: {}", part_name);
     }
 
+    // 4. Create block node in /dev/block/mapper/
     let _ = fs::create_dir_all("/dev/block/mapper");
-    let out_path = PathBuf::from(&mapper_path);
+    let out_path = PathBuf::from(mapper_path);
 
-    let dev_num = if io_resume.dev != 0 {
-        io_resume.dev
-    } else {
-        io_create.dev
-    };
-
-    if dev_num != 0 {
-        let c_path = std::ffi::CString::new(mapper_path.as_str()).unwrap();
-        unsafe {
-            libc::mknod(
-                c_path.as_ptr(),
-                libc::S_IFBLK | 0o660,
-                dev_num,
-            );
-        }
-    } else if let Ok(entries) = fs::read_dir("/sys/block") {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("dm-") {
-                let dm_name_path = entry.path().join("dm").join("name");
-                if let Ok(mapped_name) = fs::read_to_string(&dm_name_path) {
-                    if mapped_name.trim() == part_name {
-                        let dev_path = entry.path().join("dev");
-                        if let Ok(dev_str) = fs::read_to_string(&dev_path) {
-                            let parts: Vec<&str> = dev_str.trim().split(':').collect();
-                            if parts.len() == 2 {
-                                if let (Ok(maj), Ok(min)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                                    let c_path = std::ffi::CString::new(mapper_path.as_str()).unwrap();
-                                    unsafe {
-                                        libc::mknod(
-                                            c_path.as_ptr(),
-                                            libc::S_IFBLK | 0o660,
-                                            libc::makedev(maj, min),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        break;
-                    }
+    // Check sysfs for device major:minor
+    let sys_dm_path = format!("/sys/block/{}/dev", part_name);
+    if let Ok(dev_str) = fs::read_to_string(&sys_dm_path) {
+        let parts: Vec<&str> = dev_str.trim().split(':').collect();
+        if parts.len() == 2 {
+            if let (Ok(maj), Ok(min)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                let c_path = std::ffi::CString::new(out_path.to_str().unwrap()).unwrap();
+                unsafe {
+                    libc::mknod(
+                        c_path.as_ptr(),
+                        libc::S_IFBLK | 0o660,
+                        libc::makedev(maj, min),
+                    );
                 }
             }
         }
@@ -305,6 +321,7 @@ pub fn map_dm_linear(part_name: &str, super_path: &str, extents: &[PartitionExte
     Ok(out_path)
 }
 
+/// Automatically maps all dynamic partitions for the active slot (e.g. system_a -> system)
 pub fn setup_all_dynamic_partitions(active_slot: &str) {
     let super_path = Path::new("/dev/block/by-name/super");
     if !super_path.exists() {
@@ -323,6 +340,7 @@ pub fn setup_all_dynamic_partitions(active_slot: &str) {
     let s_lower = format!("_{}", active_slot.to_lowercase());
 
     for part in &partitions {
+        // Match active slot partitions (system_a, vendor_a, product_a, etc.)
         let is_active_slot = part.name.ends_with(&s_lower);
         let base_name = if is_active_slot {
             part.name.strip_suffix(&s_lower).unwrap_or(&part.name)
@@ -331,6 +349,7 @@ pub fn setup_all_dynamic_partitions(active_slot: &str) {
         };
 
         if let Ok(mapped_dev) = map_dm_linear(&part.name, "/dev/block/by-name/super", &part.extents) {
+            // Create symlink without slot suffix: /dev/block/mapper/system -> /dev/block/mapper/system_a
             let alias_path = format!("/dev/block/mapper/{}", base_name);
             if is_active_slot && !Path::new(&alias_path).exists() {
                 let _ = symlink(&mapped_dev, Path::new(&alias_path));

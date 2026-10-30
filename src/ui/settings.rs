@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::Path;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::i18n::Language;
 use super::icons::{draw_icon, M3Icon};
-use super::shapes::M3ShapeType;
+use super::shapes::{M3ShapeType, ShapeRenderer};
 use super::text::FontRenderer;
-use super::theme::{M3Theme, ThemeId};
+use super::theme::{M3Shapes, M3Theme, ThemeId};
 use crate::hardware;
 use crate::platform::TouchState;
 
@@ -75,7 +76,7 @@ pub struct SettingsState {
     pub current_theme: ThemeId,
     pub current_shape: Option<M3ShapeType>,
     pub brightness_val: i32,
-    pub brightness_progress: f32,
+    pub brightness_progress: f32, // 0.0 .. 1.0
     pub is_dragging_brightness: bool,
     pub screen_timeout: ScreenTimeout,
     pub active_slot: String,
@@ -83,11 +84,12 @@ pub struct SettingsState {
     pub status_message: String,
 }
 
-const SETTINGS_FILE: &str = "/sdcard/MRR/settings.conf";
+const SETTINGS_FILE: &str = "/mnt/vendor/persist/mrr/settings.conf";
 
+// Exact layout constants shared between render and touch hit-testing
 pub const MARGIN: f32 = 40.0;
 pub const SCREEN_W: f32 = 1220.0;
-pub const CONTENT_W: f32 = SCREEN_W - (MARGIN * 2.0);
+pub const CONTENT_W: f32 = SCREEN_W - (MARGIN * 2.0); // 1140.0
 
 pub const LANG_Y: f32 = 250.0;
 pub const LANG_H: f32 = 80.0;
@@ -123,7 +125,7 @@ impl Default for SettingsState {
         let active_slot = hardware::slots::get_current_slot();
 
         let mut s = Self {
-            language: Language::English,
+            language: Language::English, // English default!
             current_theme: ThemeId::ExpressiveDark,
             current_shape: None,
             brightness_val,
@@ -189,7 +191,7 @@ impl SettingsState {
     }
 
     pub fn save_to_persist(&mut self) {
-        let dir = Path::new("/sdcard/MRR");
+        let dir = Path::new("/mnt/vendor/persist/mrr");
         let _ = fs::create_dir_all(dir);
 
         let timeout_str = match self.screen_timeout {
@@ -212,8 +214,8 @@ impl SettingsState {
         match fs::write(SETTINGS_FILE, content) {
             Ok(_) => {
                 self.status_message = match self.language {
-                    Language::English => "Saved to /sdcard/MRR/settings.conf".to_string(),
-                    Language::Russian => "Сохранено в /sdcard/MRR/settings.conf".to_string(),
+                    Language::English => "Saved to /mnt/vendor/persist/mrr/settings.conf".to_string(),
+                    Language::Russian => "Сохранено в /mnt/vendor/persist/mrr/settings.conf".to_string(),
                 };
             }
             Err(e) => {
@@ -226,6 +228,7 @@ impl SettingsState {
         let fx = tx as f32;
         let fy = ty as f32;
 
+        // 1. Back button (Top Bar back circle & Bottom Dock button)
         if state == TouchState::Released {
             if fx >= 40.0 && fx <= 160.0 && fy >= 70.0 && fy <= 170.0 {
                 return Some(SettingsAction::Back);
@@ -235,6 +238,7 @@ impl SettingsState {
             }
         }
 
+        // 2. Brightness Slider Bar (BRIGHT_Y .. BRIGHT_Y + BRIGHT_H)
         if fy >= BRIGHT_Y - 20.0 && fy <= BRIGHT_Y + BRIGHT_H + 20.0 && fx >= MARGIN && fx <= MARGIN + CONTENT_W {
             match state {
                 TouchState::Pressed => {
@@ -256,15 +260,18 @@ impl SettingsState {
         }
 
         if state == TouchState::Released {
+            // 3. Language Selector: LANG_Y .. LANG_Y + LANG_H (2 options: English, Russian)
             if fy >= LANG_Y && fy <= LANG_Y + LANG_H {
                 let l_gap = 16.0;
                 let l_w = (CONTENT_W - l_gap) / 2.0;
 
+                // English
                 if fx >= MARGIN && fx <= MARGIN + l_w {
                     self.language = Language::English;
                     self.save_to_persist();
                     return Some(SettingsAction::SelectLanguage(Language::English));
                 }
+                // Russian
                 if fx >= MARGIN + l_w + l_gap && fx <= MARGIN + (l_w * 2.0) + l_gap {
                     self.language = Language::Russian;
                     self.save_to_persist();
@@ -272,6 +279,7 @@ impl SettingsState {
                 }
             }
 
+            // 4. Theme Selectors: THEME_Y .. THEME_Y + THEME_H (5 themes)
             let th_gap = 12.0;
             let th_w = (CONTENT_W - (th_gap * 4.0)) / 5.0;
 
@@ -286,6 +294,7 @@ impl SettingsState {
                 }
             }
 
+            // 5. Shape Selectors: SHAPE_Y .. SHAPE_Y + SHAPE_H (5 shapes)
             let sh_w = (CONTENT_W - (th_gap * 4.0)) / 5.0;
             let shapes_list = [
                 None,
@@ -305,6 +314,7 @@ impl SettingsState {
                 }
             }
 
+            // 6. Screen Timeout Selectors: TIMEOUT_Y .. TIMEOUT_Y + TIMEOUT_H (5 timeouts)
             let to_w = (CONTENT_W - (th_gap * 4.0)) / 5.0;
             if fy >= TIMEOUT_Y && fy <= TIMEOUT_Y + TIMEOUT_H {
                 for (i, t) in ScreenTimeout::ALL.iter().enumerate() {
@@ -317,6 +327,7 @@ impl SettingsState {
                 }
             }
 
+            // 7. Active Slot Switcher Card: SLOT_Y .. SLOT_Y + SLOT_H
             if fy >= SLOT_Y && fy <= SLOT_Y + SLOT_H && fx >= MARGIN && fx <= SCREEN_W - MARGIN {
                 let target_slot = if self.active_slot == "A" { "B" } else { "A" };
                 match hardware::slots::set_active_slot(target_slot) {
@@ -334,6 +345,7 @@ impl SettingsState {
                 return Some(SettingsAction::SwitchSlot);
             }
 
+            // 8. Haptic Vibration Toggle Card: HAPTIC_Y .. HAPTIC_Y + HAPTIC_H
             if fy >= HAPTIC_Y && fy <= HAPTIC_Y + HAPTIC_H && fx >= MARGIN && fx <= SCREEN_W - MARGIN {
                 self.haptic_feedback = !self.haptic_feedback;
                 self.save_to_persist();
@@ -356,6 +368,9 @@ pub fn render_settings(
 
     let lang = state.language;
 
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = MARGIN + 44.0;
     let back_cy = 115.0;
     let is_back_pressed = pressed == Some(SettingsAction::Back);
@@ -378,6 +393,9 @@ pub fn render_settings(
     fonts.draw_text(&mut canvas.pixmap, title, back_cx + 64.0, back_cy - 4.0, 38.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, subtitle, back_cx + 64.0, back_cy + 34.0, 22.0, theme.on_surface_variant);
 
+    // =========================================================================
+    // 2. LANGUAGE SELECTOR (LANG_Y .. LANG_Y + LANG_H)
+    // =========================================================================
     let lang_sec_title = match lang {
         Language::English => "SYSTEM LANGUAGE",
         Language::Russian => "ЯЗЫК ИНТЕРФЕЙСА",
@@ -407,6 +425,9 @@ pub fn render_settings(
         fonts.draw_text(&mut canvas.pixmap, label, kx + (l_w - nw) / 2.0, LANG_Y + 49.0, 22.0, fg);
     }
 
+    // =========================================================================
+    // 3. BRIGHTNESS SLIDER (BRIGHT_Y .. BRIGHT_Y + BRIGHT_H)
+    // =========================================================================
     let bright_sec_title = match lang {
         Language::English => "DISPLAY BRIGHTNESS (PWM)",
         Language::Russian => "ЯРКОСТЬ ДИСПЛЕЯ (ШИМ)",
@@ -418,16 +439,23 @@ pub fn render_settings(
     let bw = fonts.measure_text(&b_info, 20.0);
     fonts.draw_text(&mut canvas.pixmap, &b_info, SCREEN_W - MARGIN - bw, BRIGHT_Y - 18.0, 20.0, theme.on_surface_variant);
 
+    // Track
     canvas.draw_pill(MARGIN, BRIGHT_Y, CONTENT_W, BRIGHT_H, theme.surface_container_high, Some((theme.outline_variant, 1.5)));
 
+    // Active fill
     let fill_w = (CONTENT_W * state.brightness_progress).clamp(BRIGHT_H, CONTENT_W);
     canvas.draw_pill(MARGIN, BRIGHT_Y, fill_w, BRIGHT_H, theme.primary, None);
 
+    // Sun Icon inside fill
     draw_icon(&mut canvas.pixmap, M3Icon::Brightness, MARGIN + 44.0, BRIGHT_Y + BRIGHT_H / 2.0, 34.0, theme.on_primary);
 
+    // Thumb circle
     let thumb_cx = MARGIN + (CONTENT_W - BRIGHT_H) * state.brightness_progress + (BRIGHT_H / 2.0);
     canvas.draw_circle(thumb_cx, BRIGHT_Y + BRIGHT_H / 2.0, BRIGHT_H / 2.0 + 4.0, theme.on_primary);
 
+    // =========================================================================
+    // 4. THEME SELECTOR (THEME_Y .. THEME_Y + THEME_H)
+    // =========================================================================
     let theme_sec_title = match lang {
         Language::English => "COLOR THEME",
         Language::Russian => "ЦВЕТОВАЯ ТЕМА",
@@ -453,6 +481,9 @@ pub fn render_settings(
         fonts.draw_text(&mut canvas.pixmap, name, kx + (th_w - nw) / 2.0, THEME_Y + 49.0, 19.0, fg);
     }
 
+    // =========================================================================
+    // 5. M3 SHAPES (SHAPE_Y .. SHAPE_Y + SHAPE_H)
+    // =========================================================================
     let shape_sec_title = match lang {
         Language::English => "MATERIAL 3 SHAPE PROFILE",
         Language::Russian => "ФОРМА СКРУГЛЕНИЙ MATERIAL 3",
@@ -483,6 +514,9 @@ pub fn render_settings(
         fonts.draw_text(&mut canvas.pixmap, label, kx + (sh_w - nw) / 2.0, SHAPE_Y + 49.0, 20.0, fg);
     }
 
+    // =========================================================================
+    // 6. SCREEN SLEEP TIMEOUT (TIMEOUT_Y .. TIMEOUT_Y + TIMEOUT_H)
+    // =========================================================================
     let timeout_sec_title = match lang {
         Language::English => "SCREEN SLEEP TIMEOUT",
         Language::Russian => "ТАЙМАУТ ЗАСЫПАНИЯ ЭКРАНА",
@@ -507,6 +541,9 @@ pub fn render_settings(
         fonts.draw_text(&mut canvas.pixmap, lbl, kx + (to_w - nw) / 2.0, TIMEOUT_Y + 49.0, 21.0, fg);
     }
 
+    // =========================================================================
+    // 7. A/B SLOT SWITCHER CARD (SLOT_Y .. SLOT_Y + SLOT_H)
+    // =========================================================================
     canvas.draw_rounded_rect(MARGIN, SLOT_Y, CONTENT_W, SLOT_H, 28.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.5)));
 
     let slot_cx = MARGIN + 60.0;
@@ -527,12 +564,16 @@ pub fn render_settings(
     };
     fonts.draw_text(&mut canvas.pixmap, &slot_desc, slot_cx + 60.0, SLOT_Y + 100.0, 20.0, theme.on_surface_variant);
 
+    // Slot badge
     let badge_txt = format!("SLOT {}", state.active_slot);
     let sbw = fonts.measure_text(&badge_txt, 22.0);
     let sb_x = SCREEN_W - MARGIN - sbw - 40.0;
     canvas.draw_pill(sb_x - 16.0, SLOT_Y + 42.0, sbw + 32.0, 64.0, theme.primary, None);
     fonts.draw_text(&mut canvas.pixmap, &badge_txt, sb_x, SLOT_Y + 84.0, 22.0, theme.on_primary);
 
+    // =========================================================================
+    // 8. HAPTIC FEEDBACK CARD (HAPTIC_Y .. HAPTIC_Y + HAPTIC_H)
+    // =========================================================================
     canvas.draw_rounded_rect(MARGIN, HAPTIC_Y, CONTENT_W, HAPTIC_H, 28.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.5)));
 
     let hap_cx = MARGIN + 60.0;
@@ -556,6 +597,7 @@ pub fn render_settings(
     };
     fonts.draw_text(&mut canvas.pixmap, hap_sub, hap_cx + 60.0, HAPTIC_Y + 96.0, 20.0, theme.on_surface_variant);
 
+    // Switch indicator
     let sw_x = SCREEN_W - MARGIN - 120.0;
     let sw_y = HAPTIC_Y + 42.0;
     let (sw_bg, sw_knob_x) = if state.haptic_feedback {
@@ -566,9 +608,13 @@ pub fn render_settings(
     canvas.draw_pill(sw_x, sw_y, 80.0, 46.0, sw_bg, None);
     canvas.draw_circle(sw_knob_x, sw_y + 23.0, 16.0, theme.on_surface);
 
+    // Status Message Pill (Persist save status)
     canvas.draw_pill(MARGIN, MSG_Y, CONTENT_W, MSG_H, theme.surface_container_highest, Some((theme.outline_variant, 1.0)));
     fonts.draw_text(&mut canvas.pixmap, &state.status_message, MARGIN + 40.0, MSG_Y + 44.0, 21.0, theme.on_surface);
 
+    // =========================================================================
+    // 9. BOTTOM DOCK BACK BUTTON
+    // =========================================================================
     let btn_w = 320.0;
     canvas.draw_pill(MARGIN, DOCK_Y, btn_w, DOCK_H, theme.surface_container_high, Some((theme.outline_variant, 1.5)));
     draw_icon(&mut canvas.pixmap, M3Icon::ArrowBack, MARGIN + 48.0, DOCK_Y + DOCK_H / 2.0, 36.0, theme.on_surface);

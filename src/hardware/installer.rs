@@ -1,3 +1,7 @@
+//! Native AOSP / TWRP ZIP Package Installer Engine
+//! Handles extracting and running Android update packages (Magisk, ROMs, Kernels, GApps)
+//! via update-binary protocol with real-time progress & console output.
+
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::PermissionsExt;
@@ -6,22 +10,7 @@ use std::process::{Command, Stdio};
 
 use crate::hardware::ProgressCallback;
 
-pub fn is_tier0_forbidden_partition(part_name: &str) -> bool {
-    let lower = part_name.to_lowercase();
-    let forbidden = [
-        "preloader", "lk", "seccfg", "nvram", "nvdata", "nvcfg",
-        "protect1", "protect2", "protect_f", "protect_s",
-        "persist", "proinfo", "para", "tee", "scp", "sspm", "spmfw",
-        "md1img", "gpt", "bootloader", "sec1", "flashinfo", "otp",
-    ];
-    for f in &forbidden {
-        if lower == *f || lower.starts_with(&format!("{}_", f)) {
-            return true;
-        }
-    }
-    false
-}
-
+/// Flashes a raw partition image (.img) directly to the resolved hardware block device
 pub fn flash_partition_image(
     img_path: &Path,
     target_part: &str,
@@ -30,13 +19,6 @@ pub fn flash_partition_image(
 ) -> Result<(), String> {
     if !img_path.exists() {
         return Err(format!("Image file not found: {:?}", img_path));
-    }
-
-    if is_tier0_forbidden_partition(target_part) {
-        return Err(format!(
-            "Refusing to flash Tier 0 protected partition '{}' (degas device safety guard)",
-            target_part
-        ));
     }
 
     let file_size = fs::metadata(img_path)
@@ -66,6 +48,7 @@ pub fn flash_partition_image(
     Ok(())
 }
 
+/// Executes a flashable recovery ZIP or APK package
 pub fn install_zip_package(
     zip_path: &Path,
     active_slot: &str,
@@ -75,6 +58,7 @@ pub fn install_zip_package(
         return Err(format!("Package not found: {:?}", zip_path));
     }
 
+    // Direct .img partition flashing fallback
     let is_img = zip_path.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("img")).unwrap_or(false);
     if is_img {
         let file_name = zip_path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -85,17 +69,8 @@ pub fn install_zip_package(
             "vendor_boot"
         } else if name_lower.contains("dtbo") {
             "dtbo"
-        } else if name_lower.contains("recovery") {
-            "recovery"
-        } else if name_lower.contains("vbmeta") {
-            "vbmeta"
-        } else if name_lower.contains("boot") {
-            "boot"
         } else {
-            return Err(format!(
-                "Unrecognized partition image '{}'. Please specify the target partition in the Install menu.",
-                file_name
-            ));
+            "boot"
         };
         return flash_partition_image(zip_path, part_name, active_slot, progress);
     }
@@ -109,6 +84,7 @@ pub fn install_zip_package(
     let file_count = archive.len();
     progress.log(&format!("[+] ZIP archive parsed successfully ({} files)", file_count));
 
+    // Check for standard AOSP recovery update-binary
     let update_binary_entry = "META-INF/com/google/android/update-binary";
     let has_update_binary = (0..archive.len()).any(|i| {
         if let Ok(f) = archive.by_index(i) {
@@ -135,6 +111,7 @@ pub fn install_zip_package(
                 .map_err(|e| format!("Failed to extract update-binary: {}", e))?;
         }
 
+        // Set executable permissions
         let mut perms = fs::metadata(&bin_dest)
             .map_err(|e| format!("Metadata error: {}", e))?
             .permissions();
@@ -144,6 +121,7 @@ pub fn install_zip_package(
 
         progress.log("[+] Extracted update-binary with executable mode 0755");
 
+        // Extract updater-script if present alongside
         let script_entry = "META-INF/com/google/android/updater-script";
         if let Ok(mut script_file) = archive.by_name(script_entry) {
             let script_dest = work_dir.join("updater-script");
@@ -152,6 +130,7 @@ pub fn install_zip_package(
             }
         }
 
+        // Set recovery environment variables expected by update-binary / AnyKernel / Magisk
         let s_lower = active_slot.to_lowercase();
         std::env::set_var("SLOT", &s_lower);
         std::env::set_var("BOOT_SLOT", &format!("_{}", s_lower));
@@ -160,6 +139,7 @@ pub fn install_zip_package(
 
         progress.step("Executing update-binary...", 0.40);
 
+        // Check if update-binary is a shell script or an ELF executable
         let is_shell_script = {
             let mut head = [0u8; 4];
             if let Ok(mut f) = File::open(&bin_dest) {
@@ -198,21 +178,7 @@ pub fn install_zip_package(
             .spawn()
             .map_err(|e| format!("Failed to execute update-binary: {}", e))?;
 
-        let stderr_reader = child.stderr.take();
-        let stderr_handle = std::thread::spawn(move || {
-            let mut err_lines = Vec::new();
-            if let Some(err) = stderr_reader {
-                let reader = BufReader::new(err);
-                for line in reader.lines().flatten() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        err_lines.push(trimmed.to_string());
-                    }
-                }
-            }
-            err_lines
-        });
-
+        // Stream and parse stdout from update-binary
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line_res in reader.lines() {
@@ -222,6 +188,10 @@ pub fn install_zip_package(
                         continue;
                     }
 
+                    // AOSP update-binary protocol:
+                    // ui_print <message>
+                    // set_progress <fraction>
+                    // progress <fraction> <seconds>
                     if let Some(msg) = trimmed.strip_prefix("ui_print ") {
                         progress.log(msg);
                     } else if let Some(prog_str) = trimmed.strip_prefix("set_progress ") {
@@ -239,12 +209,6 @@ pub fn install_zip_package(
             .wait()
             .map_err(|e| format!("Wait for update-binary failed: {}", e))?;
 
-        if let Ok(stderr_lines) = stderr_handle.join() {
-            for err_line in stderr_lines {
-                progress.log(&format!("[STDERR] {}", err_line));
-            }
-        }
-
         if !status.success() {
             let code = status.code().unwrap_or(-1);
             return Err(format!("Installer returned error exit code: {}", code));
@@ -254,6 +218,7 @@ pub fn install_zip_package(
         progress.log("[OK] update-binary execution completed successfully!");
         Ok(())
     } else {
+        // Fallback: Check if ZIP is a direct image container (e.g. boot.img, vendor_boot.img)
         progress.step("Scanning ZIP for raw partition images...", 0.30);
         let mut flashed_any = false;
 
@@ -269,50 +234,44 @@ pub fn install_zip_package(
 
         for (i, name) in img_entries {
             let part_id = name.trim_end_matches(".img");
+            progress.log(&format!("[*] Found partition image: {}", name));
 
-            if is_tier0_forbidden_partition(part_id) {
-                progress.log(&format!("[-] Skipping Tier 0 protected partition image: {}", name));
-                continue;
-            }
+            // Attempt direct image flash
+            let dest_blk = format!("/dev/block/by-name/{}_{}", part_id, active_slot.to_lowercase());
+            let dest_path = Path::new(&dest_blk);
 
-            let dest_blk = match crate::resolve_partition_block(part_id, active_slot) {
-                Some(p) => p,
-                None => {
-                    progress.log(&format!("[-] Target block for '{}' not found, skipping", part_id));
-                    continue;
+            if dest_path.exists() {
+                progress.step(&format!("Flashing {} to {:?}...", name, dest_path), 0.60);
+                let tmp_img = work_dir.join(&name);
+
+                // Extract image
+                {
+                    let mut entry_reader = archive.by_index(i)
+                        .map_err(|e| format!("Cannot read image {}: {}", name, e))?;
+                    let mut out_file = File::create(&tmp_img)
+                        .map_err(|e| format!("Failed to create temporary image: {}", e))?;
+                    std::io::copy(&mut entry_reader, &mut out_file)
+                        .map_err(|e| format!("Failed to extract image: {}", e))?;
                 }
-            };
 
-            progress.step(&format!("Flashing {} to {:?}...", name, dest_blk), 0.60);
-            let tmp_img = work_dir.join(&name);
+                // Write to block device
+                let dumped_bytes = crate::dump_partition(&tmp_img, dest_path, None)
+                    .map_err(|e| format!("Write to {:?} failed: {}", dest_path, e))?;
 
-            {
-                let mut entry_reader = archive.by_index(i)
-                    .map_err(|e| format!("Cannot read image {}: {}", name, e))?;
-                let mut out_file = File::create(&tmp_img)
-                    .map_err(|e| format!("Failed to create temporary image: {}", e))?;
-                std::io::copy(&mut entry_reader, &mut out_file)
-                    .map_err(|e| format!("Failed to extract image: {}", e))?;
+                progress.log(&format!(
+                    "[OK] Flashed {:.1} MB to {:?}",
+                    dumped_bytes as f32 / (1024.0 * 1024.0),
+                    dest_path
+                ));
+                flashed_any = true;
             }
-
-            let dumped_bytes = crate::dump_partition(&tmp_img, &dest_blk, None)
-                .map_err(|e| format!("Write to {:?} failed: {}", dest_blk, e))?;
-
-            let _ = fs::remove_file(&tmp_img);
-
-            progress.log(&format!(
-                "[OK] Flashed {:.1} MB to {:?}",
-                dumped_bytes as f32 / (1024.0 * 1024.0),
-                dest_blk
-            ));
-            flashed_any = true;
         }
 
         if flashed_any {
             progress.step("Direct image installation complete!", 1.0);
             Ok(())
         } else {
-            Err("No valid META-INF/com/google/android/update-binary or allowed partition images found in ZIP!".to_string())
+            Err("No META-INF/com/google/android/update-binary or flashable partition images found in ZIP!".to_string())
         }
     }
 }

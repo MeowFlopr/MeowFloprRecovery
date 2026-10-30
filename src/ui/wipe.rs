@@ -1,4 +1,4 @@
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::icons::{draw_icon, M3Icon};
@@ -33,6 +33,7 @@ pub enum WipeAction {
 
 pub struct WipeState {
     pub current_tab: WipeTab,
+    // Advanced Wipe checkboxes
     pub wipe_dalvik: bool,
     pub wipe_cache: bool,
     pub wipe_system: bool,
@@ -40,9 +41,11 @@ pub struct WipeState {
     pub wipe_data: bool,
     pub wipe_internal: bool,
     pub wipe_metadata: bool,
+    // Interactive SwipeSliders
     pub adv_slider: SwipeSlider,
     pub reset_slider: SwipeSlider,
     pub format_slider: SwipeSlider,
+    // Format Data confirmation prompt
     pub format_input: String,
     pub status_message: String,
 }
@@ -50,9 +53,9 @@ pub struct WipeState {
 impl Default for WipeState {
     fn default() -> Self {
         let margin = 40.0;
-        let content_w = 1220.0 - (margin * 2.0);
+        let content_w = 1220.0 - (margin * 2.0); // 1140.0
         let slider_x = margin + 40.0;
-        let slider_w = content_w - 80.0;
+        let slider_w = content_w - 80.0; // 1060.0
         let slider_h = 130.0;
 
         let adv_slider = SwipeSlider::new(slider_x, 2280.0, slider_w, slider_h, "Swipe to Wipe Selected >>>")
@@ -98,6 +101,7 @@ impl WipeState {
         let fy = ty as f32;
         let margin = 40.0;
 
+        // 1. Back button (Top Bar: x: 40..160, y: 70..170, or Bottom Bar: y: 2460..2580)
         if state == TouchState::Released {
             if fx >= 40.0 && fx <= 160.0 && fy >= 70.0 && fy <= 170.0 {
                 return Some(WipeAction::Back);
@@ -107,8 +111,9 @@ impl WipeState {
             }
         }
 
+        // 2. Tab Bar Selection (y: 200 .. 290)
         if state == TouchState::Released && fy >= 200.0 && fy <= 290.0 {
-            let tab_w = (1140.0 - 24.0) / 3.0;
+            let tab_w = (1140.0 - 24.0) / 3.0; // ~372.0
             if fx >= margin && fx <= margin + tab_w {
                 self.current_tab = WipeTab::AdvancedWipe;
                 return Some(WipeAction::SelectTab(WipeTab::AdvancedWipe));
@@ -121,6 +126,7 @@ impl WipeState {
             }
         }
 
+        // 3. Checkboxes in Advanced Wipe (y: 330 .. 1560)
         if self.current_tab == WipeTab::AdvancedWipe && state == TouchState::Released {
             let row_h = 135.0;
             let start_y = 330.0;
@@ -164,7 +170,9 @@ impl WipeState {
             }
         }
 
+        // 4. Format Data On-Screen Confirmation Keypad
         if self.current_tab == WipeTab::FormatData && state == TouchState::Released {
+            // Keypad area: y: 1150 .. 1450
             if fy >= 1150.0 && fy <= 1450.0 {
                 let kw = 200.0;
                 let kh = 90.0;
@@ -172,6 +180,7 @@ impl WipeState {
                 let row1_y = 1180.0;
                 let row2_y = 1290.0;
 
+                // Row 1: 'Y', 'E', 'S'
                 let kx_y = margin + 120.0;
                 let kx_e = kx_y + kw + k_gap;
                 let kx_s = kx_e + kw + k_gap;
@@ -197,6 +206,7 @@ impl WipeState {
                     }
                 }
 
+                // Row 2: 'CLEAR', 'BACKSPACE'
                 let c_w = 340.0;
                 let cx_clear = margin + 180.0;
                 let cx_bksp = cx_clear + c_w + 30.0;
@@ -214,10 +224,12 @@ impl WipeState {
             }
         }
 
+        // 5. Interactive SwipeSliders
         let confirmed = match self.current_tab {
             WipeTab::AdvancedWipe => self.adv_slider.handle_touch(tx, ty, state),
             WipeTab::FactoryReset => self.reset_slider.handle_touch(tx, ty, state),
             WipeTab::FormatData => {
+                // Slider is unlocked ONLY when word 'yes' is typed
                 if self.format_input.trim().eq_ignore_ascii_case("yes") {
                     self.format_slider.handle_touch(tx, ty, state)
                 } else {
@@ -245,8 +257,11 @@ pub fn render_wipe(
 
     let screen_w = 1220.0;
     let margin = 40.0;
-    let content_w = screen_w - (margin * 2.0);
+    let content_w = screen_w - (margin * 2.0); // 1140.0
 
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = margin + 44.0;
     let back_cy = 115.0;
     let is_back_pressed = pressed == Some(WipeAction::Back);
@@ -261,10 +276,13 @@ pub fn render_wipe(
     fonts.draw_text(&mut canvas.pixmap, "Wipe & Clean", back_cx + 64.0, back_cy - 4.0, 38.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, "Selective wipe, factory reset & format data", back_cx + 64.0, back_cy + 34.0, 22.0, theme.on_surface_variant);
 
+    // =========================================================================
+    // 2. TAB SELECTOR BAR (3 Expressive Segmented Tabs: y: 200 .. 280)
+    // =========================================================================
     let tab_y = 200.0;
     let tab_h = 76.0;
     let tab_gap = 12.0;
-    let tab_w = (content_w - (tab_gap * 2.0)) / 3.0;
+    let tab_w = (content_w - (tab_gap * 2.0)) / 3.0; // ~365.0
 
     let tabs = [
         ("Advanced Wipe", WipeTab::AdvancedWipe),
@@ -291,8 +309,12 @@ pub fn render_wipe(
         fonts.draw_text(&mut canvas.pixmap, title, tx + (tab_w - tw) / 2.0, tab_y + 48.0, 24.0, fg);
     }
 
+    // =========================================================================
+    // 3. TAB CONTENT
+    // =========================================================================
     match state.current_tab {
         WipeTab::AdvancedWipe => {
+            // Checkbox items
             let items = [
                 ("Dalvik / ART Cache", "Recompiles runtime bytecode; fixes crashes", state.wipe_dalvik, false),
                 ("Cache Partition", "Temporary OTA and recovery logs", state.wipe_cache, false),
@@ -328,6 +350,7 @@ pub fn render_wipe(
 
                 canvas.draw_rounded_rect(margin, cy, content_w, row_h, 24.0, Some(card_bg), card_border);
 
+                // Checkbox circle
                 let chk_cx = margin + 50.0;
                 let chk_cy = cy + row_h / 2.0;
                 let chk_color = if *is_checked {
@@ -341,6 +364,7 @@ pub fn render_wipe(
                     draw_icon(&mut canvas.pixmap, M3Icon::Check, chk_cx, chk_cy, 30.0, theme.on_primary);
                 }
 
+                // Text labels
                 let title_color = if *is_checked && *is_danger { theme.error } else { theme.on_surface };
                 fonts.draw_text(&mut canvas.pixmap, name, chk_cx + 46.0, cy + 54.0, 27.0, title_color);
                 fonts.draw_text(&mut canvas.pixmap, desc, chk_cx + 46.0, cy + 96.0, 19.0, theme.on_surface_variant);
@@ -351,6 +375,7 @@ pub fn render_wipe(
                 }
             }
 
+            // Warning pill if high-risk partitions selected
             if state.wipe_data || state.wipe_internal || state.wipe_metadata {
                 let warn_y = 1380.0;
                 canvas.draw_rounded_rect(
@@ -367,6 +392,7 @@ pub fn render_wipe(
                 fonts.draw_text(&mut canvas.pixmap, "Удаление Data сотрёт все приложения. Metadata уничтожит ключи FBE v2.", margin + 80.0, warn_y + 80.0, 18.0, theme.on_surface);
             }
 
+            // Swipe to Wipe Selected
             state.adv_slider.render(canvas, theme, fonts);
         }
 
@@ -402,6 +428,7 @@ pub fn render_wipe(
             fonts.draw_text(&mut canvas.pixmap, "ЛИЧНЫЕ ДАННЫЕ В БЕЗОПАСНОСТИ:", margin + 110.0, safe_card_y + 52.0, 24.0, Color::from_rgba8(120, 240, 160, 255));
             fonts.draw_text(&mut canvas.pixmap, "Внутренняя память (/data/media/0, Фото, Видео, Загрузки) НЕ затрагивается!", margin + 110.0, safe_card_y + 95.0, 20.0, theme.on_surface);
 
+            // Swipe to Factory Reset Slider
             state.reset_slider.render(canvas, theme, fonts);
         }
 
@@ -426,6 +453,9 @@ pub fn render_wipe(
             fonts.draw_text(&mut canvas.pixmap, "Применяется при смене HyperOS на кастомную AOSP прошивку", margin + 40.0, text_y + 195.0, 22.0, theme.on_surface_variant);
             fonts.draw_text(&mut canvas.pixmap, "или при полном повреждении структур шифрования.", margin + 40.0, text_y + 235.0, 22.0, theme.on_surface_variant);
 
+            // =================================================================
+            // On-Screen "Type yes" Protection Box (y: 930 .. 1480)
+            // =================================================================
             let prompt_y = 930.0;
             canvas.draw_rounded_rect(
                 margin,
@@ -440,6 +470,7 @@ pub fn render_wipe(
             fonts.draw_text(&mut canvas.pixmap, "Защита от случайного нажатия:", margin + 40.0, prompt_y + 55.0, 26.0, theme.on_surface);
             fonts.draw_text(&mut canvas.pixmap, "Для разблокировки слайдера введите слово \"yes\":", margin + 40.0, prompt_y + 95.0, 22.0, theme.on_surface_variant);
 
+            // Input display box
             let input_box_y = prompt_y + 130.0;
             let input_box_h = 75.0;
             let is_unlocked = state.format_input.trim().eq_ignore_ascii_case("yes");
@@ -458,6 +489,7 @@ pub fn render_wipe(
             };
             fonts.draw_text(&mut canvas.pixmap, &display_str, margin + 70.0, input_box_y + 50.0, 28.0, in_fg);
 
+            // Virtual Keyboard Keys (Row 1: Y, E, S)
             let kw = 200.0;
             let kh = 90.0;
             let k_gap = 20.0;
@@ -473,6 +505,7 @@ pub fn render_wipe(
                 fonts.draw_text(&mut canvas.pixmap, ch, kx + kw / 2.0 - 12.0, row1_y + 58.0, 36.0, theme.on_surface);
             }
 
+            // Row 2: Clear, Backspace
             let row2_y = row1_y + kh + 20.0;
             let c_w = 340.0;
             let cx_clear = margin + 180.0;
@@ -488,9 +521,11 @@ pub fn render_wipe(
             let delw = fonts.measure_text(del_lbl, 24.0);
             fonts.draw_text(&mut canvas.pixmap, del_lbl, cx_bksp + (c_w - delw) / 2.0, row2_y + 56.0, 24.0, theme.on_surface);
 
+            // Red Danger Swipe Slider (Unlocked when "yes" is entered)
             if is_unlocked {
                 state.format_slider.render(canvas, theme, fonts);
             } else {
+                // Render locked dummy track
                 let locked_y = 1540.0;
                 let locked_w = content_w - 80.0;
                 canvas.draw_pill(margin + 40.0, locked_y, locked_w, 130.0, theme.surface_container, Some((theme.outline_variant, 1.0)));
@@ -501,6 +536,9 @@ pub fn render_wipe(
         }
     }
 
+    // =========================================================================
+    // 4. BOTTOM DOCK BACK
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 110.0;
     let btn_w = 280.0;

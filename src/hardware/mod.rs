@@ -1,6 +1,7 @@
 pub mod backlight;
 pub mod battery;
 pub mod dynamic_partitions;
+pub mod fastbootd;
 pub mod installer;
 pub mod power;
 pub mod restore;

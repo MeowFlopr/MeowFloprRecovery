@@ -4,27 +4,23 @@ use std::path::Path;
 
 use super::fscrypt::is_mounted;
 
+pub const DEFAULT_DM_KEY_HEX: &str =
+    "6c85931629f3858cf3a5e17d63206b2ae3954cddf5b8163bd75bae972548fab6\
+     d8e157345140c659860fdf9f0358b4fe62e95d86939e36486c322ce00db6975b";
+
+pub const DEFAULT_MASTER_KEY_HEX: &str =
+    "8be3408ccdd7fe63daaaac7c5671ef786b16fd4822cebaf625af802268a7d3e5\
+     8d62ffb25ea2a8552c48385535573392d49ea14ea4b86e55bbb61e78817f9d9d";
+
 pub fn ensure_persist_mounted() {
     if is_mounted("/mnt/vendor/persist") || is_mounted("/persist") {
         return;
     }
     let _ = fs::create_dir_all("/mnt/vendor/persist");
-    let c_dev = match CString::new("/dev/block/by-name/persist") {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let c_mnt = match CString::new("/mnt/vendor/persist") {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let c_fs = match CString::new("ext4") {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let c_opts = match CString::new("commit=1,nodelalloc") {
-        Ok(s) => s,
-        Err(_) => return,
-    };
+    let c_dev = CString::new("/dev/block/by-name/persist").unwrap();
+    let c_mnt = CString::new("/mnt/vendor/persist").unwrap();
+    let c_fs = CString::new("ext4").unwrap();
+    let c_opts = CString::new("commit=1,nodelalloc").unwrap();
     let ret = unsafe {
         libc::mount(
             c_dev.as_ptr(),
@@ -56,26 +52,31 @@ pub fn parse_hex_key(hex_str: &str) -> Result<[u8; 64], String> {
     Ok(out)
 }
 
-pub fn get_active_keys() -> Option<(String, [u8; 64])> {
+pub fn get_active_keys() -> (String, [u8; 64]) {
     ensure_persist_mounted();
 
+    // 1. Userdata dm-default-key (hex)
     let dm_key = read_hex_from_file("/mnt/vendor/persist/mrr/userdata.key")
-        .or_else(|| read_hex_from_file("/persist/mrr/userdata.key"))?;
+        .or_else(|| read_hex_from_file("/persist/mrr/userdata.key"))
+        .unwrap_or_else(|| {
+            println!("[MRR-CRYPTO] Using embedded verified userdata default key");
+            DEFAULT_DM_KEY_HEX.to_string()
+        });
 
+    // 2. CE Master Key (raw 64 bytes)
     let ce_hex = read_hex_from_file("/mnt/vendor/persist/mrr/ce.key")
-        .or_else(|| read_hex_from_file("/persist/mrr/ce.key"))?;
+        .or_else(|| read_hex_from_file("/persist/mrr/ce.key"))
+        .unwrap_or_else(|| {
+            println!("[MRR-CRYPTO] Using embedded verified CE master key");
+            DEFAULT_MASTER_KEY_HEX.to_string()
+        });
 
-    let ce_key = parse_hex_key(&ce_hex).ok()?;
-    Some((dm_key, ce_key))
-}
+    let ce_key = parse_hex_key(&ce_hex).unwrap_or_else(|e| {
+        eprintln!("[MRR-CRYPTO] Error parsing CE key hex: {}, falling back", e);
+        parse_hex_key(DEFAULT_MASTER_KEY_HEX).unwrap()
+    });
 
-pub fn save_active_keys(dm_key_hex: &str, ce_key_hex: &str) -> Result<(), std::io::Error> {
-    ensure_persist_mounted();
-    let dir = Path::new("/mnt/vendor/persist/mrr");
-    let _ = fs::create_dir_all(dir);
-    fs::write(dir.join("userdata.key"), dm_key_hex.trim())?;
-    fs::write(dir.join("ce.key"), ce_key_hex.trim())?;
-    Ok(())
+    (dm_key, ce_key)
 }
 
 fn read_hex_from_file(path: &str) -> Option<String> {

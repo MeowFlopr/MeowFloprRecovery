@@ -1,4 +1,4 @@
-use tiny_skia::{Color, Paint, PathBuilder, PixmapMut, Stroke, Transform};
+use tiny_skia::{Color, FillRule, Paint, PathBuilder, PixmapMut, Stroke, Transform};
 
 #[derive(Debug, Clone, Copy)]
 pub enum M3Icon {
@@ -51,12 +51,16 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
 
     match icon {
         M3Icon::Install => {
+            // Downward arrow into a tray
             let mut pb = PathBuilder::new();
+            // Arrow stem
             pb.move_to(cx, cy - s * 0.65);
             pb.line_to(cx, cy + s * 0.20);
+            // Arrow head
             pb.move_to(cx - s * 0.40, cy - s * 0.15);
             pb.line_to(cx, cy + s * 0.25);
             pb.line_to(cx + s * 0.40, cy - s * 0.15);
+            // Tray
             pb.move_to(cx - s * 0.55, cy + s * 0.35);
             pb.line_to(cx - s * 0.55, cy + s * 0.65);
             pb.line_to(cx + s * 0.55, cy + s * 0.65);
@@ -67,17 +71,21 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Wipe => {
+            // Trash can / broom
             let mut pb = PathBuilder::new();
+            // Lid
             pb.move_to(cx - s * 0.55, cy - s * 0.40);
             pb.line_to(cx + s * 0.55, cy - s * 0.40);
             pb.move_to(cx - s * 0.25, cy - s * 0.40);
             pb.line_to(cx - s * 0.20, cy - s * 0.65);
             pb.line_to(cx + s * 0.20, cy - s * 0.65);
             pb.line_to(cx + s * 0.25, cy - s * 0.40);
+            // Can body
             pb.move_to(cx - s * 0.45, cy - s * 0.30);
             pb.line_to(cx - s * 0.35, cy + s * 0.65);
             pb.line_to(cx + s * 0.35, cy + s * 0.65);
             pb.line_to(cx + s * 0.45, cy - s * 0.30);
+            // Inner lines
             pb.move_to(cx, cy - s * 0.15);
             pb.line_to(cx, cy + s * 0.45);
 
@@ -86,11 +94,14 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Backup => {
+            // Cloud with upward arrow
             let mut pb = PathBuilder::new();
+            // Cloud shape
             pb.move_to(cx - s * 0.55, cy + s * 0.40);
             pb.cubic_to(cx - s * 0.85, cy + s * 0.35, cx - s * 0.85, cy - s * 0.15, cx - s * 0.50, cy - s * 0.25);
             pb.cubic_to(cx - s * 0.45, cy - s * 0.70, cx + s * 0.25, cy - s * 0.75, cx + s * 0.45, cy - s * 0.35);
             pb.cubic_to(cx + s * 0.85, cy - s * 0.25, cx + s * 0.85, cy + s * 0.25, cx + s * 0.55, cy + s * 0.40);
+            // Arrow up
             pb.move_to(cx, cy + s * 0.45);
             pb.line_to(cx, cy - s * 0.05);
             pb.move_to(cx - s * 0.25, cy + s * 0.15);
@@ -102,16 +113,20 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Decrypt => {
+            // Unlocked padlock / Shield
             let mut pb = PathBuilder::new();
+            // Shackle (open)
             pb.move_to(cx - s * 0.30, cy - s * 0.05);
             pb.line_to(cx - s * 0.30, cy - s * 0.45);
             pb.cubic_to(cx - s * 0.30, cy - s * 0.80, cx + s * 0.30, cy - s * 0.80, cx + s * 0.30, cy - s * 0.45);
             pb.line_to(cx + s * 0.30, cy - s * 0.25);
+            // Lock body
             pb.move_to(cx - s * 0.45, cy - s * 0.05);
             pb.line_to(cx + s * 0.45, cy - s * 0.05);
             pb.line_to(cx + s * 0.45, cy + s * 0.60);
             pb.line_to(cx - s * 0.45, cy + s * 0.60);
             pb.close();
+            // Keyhole
             pb.move_to(cx, cy + s * 0.15);
             pb.line_to(cx, cy + s * 0.38);
 
@@ -120,18 +135,22 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Mount => {
+            // Storage drive / layers
             let mut pb = PathBuilder::new();
             let h = s * 0.30;
+            // Top disk
             pb.move_to(cx - s * 0.60, cy - s * 0.40);
             pb.line_to(cx + s * 0.60, cy - s * 0.40);
             pb.line_to(cx + s * 0.60, cy - s * 0.40 + h);
             pb.line_to(cx - s * 0.60, cy - s * 0.40 + h);
             pb.close();
+            // Middle disk
             pb.move_to(cx - s * 0.60, cy - s * 0.05);
             pb.line_to(cx + s * 0.60, cy - s * 0.05);
             pb.line_to(cx + s * 0.60, cy - s * 0.05 + h);
             pb.line_to(cx - s * 0.60, cy - s * 0.05 + h);
             pb.close();
+            // Bottom disk
             pb.move_to(cx - s * 0.60, cy + s * 0.30);
             pb.line_to(cx + s * 0.60, cy + s * 0.30);
             pb.line_to(cx + s * 0.60, cy + s * 0.30 + h);
@@ -143,10 +162,13 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Terminal => {
+            // >_ Prompt
             let mut pb = PathBuilder::new();
+            // Angle bracket >
             pb.move_to(cx - s * 0.50, cy - s * 0.45);
             pb.line_to(cx - s * 0.05, cy - s * 0.05);
             pb.line_to(cx - s * 0.50, cy + s * 0.35);
+            // Underscore cursor _
             pb.move_to(cx + s * 0.05, cy + s * 0.35);
             pb.line_to(cx + s * 0.55, cy + s * 0.35);
 
@@ -155,19 +177,26 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Settings => {
+            // Tune / Equalizer Sliders
             let mut pb = PathBuilder::new();
+            // Line 1
             pb.move_to(cx - s * 0.55, cy - s * 0.35);
             pb.line_to(cx + s * 0.55, cy - s * 0.35);
+            // Knob 1
             pb.move_to(cx - s * 0.15, cy - s * 0.55);
             pb.line_to(cx - s * 0.15, cy - s * 0.15);
 
+            // Line 2
             pb.move_to(cx - s * 0.55, cy + s * 0.05);
             pb.line_to(cx + s * 0.55, cy + s * 0.05);
+            // Knob 2
             pb.move_to(cx + s * 0.20, cy - s * 0.15);
             pb.line_to(cx + s * 0.20, cy + s * 0.25);
 
+            // Line 3
             pb.move_to(cx - s * 0.55, cy + s * 0.45);
             pb.line_to(cx + s * 0.55, cy + s * 0.45);
+            // Knob 3
             pb.move_to(cx - s * 0.30, cy + s * 0.25);
             pb.line_to(cx - s * 0.30, cy + s * 0.65);
 
@@ -176,8 +205,11 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Power => {
+            // Power standby icon
             let mut pb = PathBuilder::new();
+            // Circle arc
             pb.push_circle(cx, cy + s * 0.05, s * 0.55);
+            // Line at top
             pb.move_to(cx, cy - s * 0.65);
             pb.line_to(cx, cy + s * 0.05);
 
@@ -192,6 +224,7 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             pb.line_to(cx + s * 0.45, cy + s * 0.35);
             pb.line_to(cx - s * 0.65, cy + s * 0.35);
             pb.close();
+            // Terminal bump
             pb.move_to(cx + s * 0.45, cy - s * 0.15);
             pb.line_to(cx + s * 0.60, cy - s * 0.15);
             pb.line_to(cx + s * 0.60, cy + s * 0.15);
@@ -310,6 +343,7 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Backspace => {
+            // Tag with 'X' inside
             let mut pb = PathBuilder::new();
             pb.move_to(cx - s * 0.65, cy);
             pb.line_to(cx - s * 0.25, cy - s * 0.45);
@@ -317,6 +351,7 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             pb.line_to(cx + s * 0.60, cy + s * 0.45);
             pb.line_to(cx - s * 0.25, cy + s * 0.45);
             pb.close();
+            // X inside
             pb.move_to(cx - s * 0.05, cy - s * 0.20);
             pb.line_to(cx + s * 0.35, cy + s * 0.20);
             pb.move_to(cx + s * 0.35, cy - s * 0.20);
@@ -328,15 +363,18 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
         }
         M3Icon::Lock => {
             let mut pb = PathBuilder::new();
+            // Shackle
             pb.move_to(cx - s * 0.35, cy - s * 0.10);
             pb.line_to(cx - s * 0.35, cy - s * 0.35);
             pb.cubic_to(cx - s * 0.35, cy - s * 0.70, cx + s * 0.35, cy - s * 0.70, cx + s * 0.35, cy - s * 0.35);
             pb.line_to(cx + s * 0.35, cy - s * 0.10);
+            // Body
             pb.move_to(cx - s * 0.50, cy - s * 0.10);
             pb.line_to(cx + s * 0.50, cy - s * 0.10);
             pb.line_to(cx + s * 0.50, cy + s * 0.60);
             pb.line_to(cx - s * 0.50, cy + s * 0.60);
             pb.close();
+            // Keyhole
             pb.move_to(cx, cy + s * 0.15);
             pb.line_to(cx, cy + s * 0.35);
 
@@ -345,11 +383,13 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Warning => {
+            // Triangle with exclamation mark
             let mut pb = PathBuilder::new();
             pb.move_to(cx, cy - s * 0.65);
             pb.line_to(cx + s * 0.65, cy + s * 0.55);
             pb.line_to(cx - s * 0.65, cy + s * 0.55);
             pb.close();
+            // Exclamation
             pb.move_to(cx, cy - s * 0.25);
             pb.line_to(cx, cy + s * 0.15);
             pb.move_to(cx, cy + s * 0.32);
@@ -371,11 +411,14 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
         }
         M3Icon::Usb => {
             let mut pb = PathBuilder::new();
+            // Center line
             pb.move_to(cx, cy - s * 0.55);
             pb.line_to(cx, cy + s * 0.55);
+            // Left branch
             pb.move_to(cx - s * 0.40, cy - s * 0.20);
             pb.line_to(cx - s * 0.40, cy + s * 0.05);
             pb.line_to(cx, cy + s * 0.25);
+            // Right branch
             pb.move_to(cx + s * 0.40, cy - s * 0.20);
             pb.line_to(cx + s * 0.40, cy + s * 0.05);
             pb.line_to(cx, cy + s * 0.25);
@@ -386,7 +429,9 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
         }
         M3Icon::Brightness => {
             let mut pb = PathBuilder::new();
+            // Center sun circle
             pb.push_circle(cx, cy, s * 0.35);
+            // 4 Rays
             pb.move_to(cx, cy - s * 0.70);
             pb.line_to(cx, cy - s * 0.48);
             pb.move_to(cx, cy + s * 0.48);
@@ -401,11 +446,14 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Root => {
+            // # symbol
             let mut pb = PathBuilder::new();
+            // Vertical lines
             pb.move_to(cx - s * 0.22, cy - s * 0.60);
             pb.line_to(cx - s * 0.28, cy + s * 0.60);
             pb.move_to(cx + s * 0.28, cy - s * 0.60);
             pb.line_to(cx + s * 0.22, cy + s * 0.60);
+            // Horizontal lines
             pb.move_to(cx - s * 0.55, cy - s * 0.20);
             pb.line_to(cx + s * 0.55, cy - s * 0.20);
             pb.move_to(cx - s * 0.55, cy + s * 0.20);
@@ -417,9 +465,11 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
         }
         M3Icon::Copy => {
             let mut pb = PathBuilder::new();
+            // Back sheet
             pb.move_to(cx - s * 0.20, cy - s * 0.50);
             pb.line_to(cx + s * 0.50, cy - s * 0.50);
             pb.line_to(cx + s * 0.50, cy + s * 0.20);
+            // Front sheet
             pb.move_to(cx - s * 0.50, cy - s * 0.20);
             pb.line_to(cx + s * 0.20, cy - s * 0.20);
             pb.line_to(cx + s * 0.20, cy + s * 0.50);
@@ -432,9 +482,11 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
         }
         M3Icon::Restore => {
             let mut pb = PathBuilder::new();
+            // Circular arrow
             pb.move_to(cx + s * 0.50, cy);
             pb.cubic_to(cx + s * 0.50, cy + s * 0.55, cx - s * 0.50, cy + s * 0.55, cx - s * 0.50, cy);
             pb.cubic_to(cx - s * 0.50, cy - s * 0.55, cx + s * 0.30, cy - s * 0.55, cx + s * 0.45, cy - s * 0.20);
+            // Arrowhead
             pb.line_to(cx + s * 0.25, cy - s * 0.20);
             pb.move_to(cx + s * 0.45, cy - s * 0.20);
             pb.line_to(cx + s * 0.45, cy - s * 0.45);
@@ -444,12 +496,15 @@ pub fn draw_icon(pixmap: &mut PixmapMut, icon: M3Icon, cx: f32, cy: f32, size: f
             }
         }
         M3Icon::Advanced => {
+            // Wrench / screwdriver crossed or toolbox
             let mut pb = PathBuilder::new();
+            // Box outline
             pb.move_to(cx - s * 0.55, cy - s * 0.20);
             pb.line_to(cx + s * 0.55, cy - s * 0.20);
             pb.line_to(cx + s * 0.50, cy + s * 0.55);
             pb.line_to(cx - s * 0.50, cy + s * 0.55);
             pb.close();
+            // Handle
             pb.move_to(cx - s * 0.25, cy - s * 0.20);
             pb.line_to(cx - s * 0.25, cy - s * 0.50);
             pb.line_to(cx + s * 0.25, cy - s * 0.50);

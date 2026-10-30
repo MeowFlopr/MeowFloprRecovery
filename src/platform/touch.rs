@@ -1,4 +1,8 @@
+//! Pure Rust Touch & Key Input Driver for Xiaomi 14T (MediaTek MT6897)
+//! Dynamically detects and probes touchscreen and power button controllers from /dev/input/event*.
+
 use std::ffi::{CStr, CString};
+use std::fs;
 use std::path::Path;
 use std::time::Instant;
 
@@ -32,7 +36,7 @@ pub enum TouchState {
     Pressed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct TouchEvent {
     pub x: i32,
     pub y: i32,
@@ -46,8 +50,6 @@ pub struct InputManager {
     last_y: i32,
     max_x: i32,
     max_y: i32,
-    display_width: i32,
-    display_height: i32,
     active_slot: i32,
     touch_state: TouchState,
     last_activity: Instant,
@@ -68,17 +70,25 @@ type IoctlReq = libc::c_int;
 #[cfg(not(target_env = "musl"))]
 type IoctlReq = libc::c_ulong;
 
+/// Dynamically discovers touch and power button input devices
 fn probe_input_devices() -> (libc::c_int, libc::c_int, i32, i32) {
     let mut touch_fd = -1;
     let mut power_fd = -1;
-    let mut max_x = 1220;
-    let mut max_y = 2712;
+    let mut max_x = 122000;
+    let mut max_y = 271200;
 
+    // EVIOCGNAME(256): 0x81004506
     let eviocgname = 0x81004506u32 as IoctlReq;
+    // EVIOCGBIT(ev, len): _IOC(IOC_READ, 'E', 0x20 + ev, len)
+    // EVIOCGBIT(0, 8): ev types (len 8 bytes) -> 0x80084520
     let eviocgbit_types = 0x80084520u32 as IoctlReq;
+    // EVIOCGBIT(EV_KEY, 64): key bits -> 0x80404521
     let eviocgbit_key = 0x80404521u32 as IoctlReq;
+    // EVIOCGBIT(EV_ABS, 64): abs bits -> 0x80404523
     let eviocgbit_abs = 0x80404523u32 as IoctlReq;
+    // EVIOCGABS(ABS_MT_POSITION_X): 0x80184575 (struct size 24 bytes)
     let eviocgabs_x = 0x80184575u32 as IoctlReq;
+    // EVIOCGABS(ABS_MT_POSITION_Y): 0x80184576
     let eviocgabs_y = 0x80184576u32 as IoctlReq;
 
     for i in 0..32 {
@@ -114,11 +124,13 @@ fn probe_input_devices() -> (libc::c_int, libc::c_int, i32, i32) {
         let has_keys = test_bit(EV_KEY as usize, &ev_types);
         let has_abs = test_bit(EV_ABS as usize, &ev_types);
 
+        // Check for Touchscreen
         if has_abs && touch_fd < 0 {
             let mut abs_bits = [0u8; 64];
             let _ = unsafe { libc::ioctl(fd, eviocgbit_abs, abs_bits.as_mut_ptr()) };
 
             let has_mt_x = test_bit(ABS_MT_POSITION_X as usize, &abs_bits);
+            let _has_mt_y = test_bit(ABS_MT_POSITION_Y as usize, &abs_bits);
             let has_raw_x = test_bit(ABS_X as usize, &abs_bits);
 
             if has_mt_x || has_raw_x {
@@ -128,6 +140,7 @@ fn probe_input_devices() -> (libc::c_int, libc::c_int, i32, i32) {
                     dev_path, name_str
                 );
 
+                // Query hardware resolution bounds
                 let mut abs_info_x = InputAbsInfo::default();
                 let mut abs_info_y = InputAbsInfo::default();
                 let ret_x = unsafe { libc::ioctl(fd, eviocgabs_x, &mut abs_info_x) };
@@ -144,10 +157,11 @@ fn probe_input_devices() -> (libc::c_int, libc::c_int, i32, i32) {
                     "[MRR-INPUT] Touch axis calibration bounds: X[0..{}], Y[0..{}]",
                     max_x, max_y
                 );
-                continue;
+                continue; // Keep fd open
             }
         }
 
+        // Check for Power Button
         if has_keys && power_fd < 0 {
             let mut key_bits = [0u8; 64];
             let _ = unsafe { libc::ioctl(fd, eviocgbit_key, key_bits.as_mut_ptr()) };
@@ -158,13 +172,15 @@ fn probe_input_devices() -> (libc::c_int, libc::c_int, i32, i32) {
                     "[MRR-INPUT] Discovered Power Key on {}: \"{}\"",
                     dev_path, name_str
                 );
-                continue;
+                continue; // Keep fd open
             }
         }
 
+        // If not selected, close fd
         unsafe { libc::close(fd) };
     }
 
+    // Static fallback if probing did not resolve
     if touch_fd < 0 {
         let fallback_touch = b"/dev/input/event3\0";
         touch_fd = unsafe {
@@ -205,18 +221,9 @@ impl InputManager {
             last_y: 0,
             max_x,
             max_y,
-            display_width: 1220,
-            display_height: 2712,
             active_slot: 0,
             touch_state: TouchState::Released,
             last_activity: Instant::now(),
-        }
-    }
-
-    pub fn set_display_size(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.display_width = width as i32;
-            self.display_height = height as i32;
         }
     }
 
@@ -225,15 +232,14 @@ impl InputManager {
         self.last_activity
     }
 
-    pub fn scale_coordinate(val: i32, max_bound: i32, target_dim: i32) -> i32 {
-        let bound = if max_bound > 0 { max_bound } else { target_dim };
-        let scaled = (val.max(0) as f64 / bound as f64) * target_dim as f64;
-        (scaled as i32).clamp(0, target_dim.saturating_sub(1))
-    }
-
+    /// Read pending hardware events.
+    /// Returns:
+    /// - `power_pressed`: true if user released the power button (to toggle display)
+    /// - `touch`: Some(TouchEvent) if touch state or position changed
     pub fn poll_events(&mut self) -> (bool, Option<TouchEvent>) {
         let mut toggle_screen = false;
 
+        // 1. Process Power Button
         if self.power_fd >= 0 {
             let mut ev: libc::input_event = unsafe { std::mem::zeroed() };
             let ev_size = std::mem::size_of::<libc::input_event>();
@@ -251,6 +257,7 @@ impl InputManager {
                 }
 
                 if ev.type_ == EV_KEY && ev.code == KEY_POWER && ev.value == 0 {
+                    // Released power button
                     toggle_screen = true;
                     self.last_activity = Instant::now();
                     println!("[MRR-POWER] Power key released -> Requesting display toggle");
@@ -258,6 +265,7 @@ impl InputManager {
             }
         }
 
+        // 2. Process Touch Events
         if self.touch_fd < 0 {
             return (toggle_screen, None);
         }
@@ -287,10 +295,24 @@ impl InputManager {
                         self.active_slot = ev.value;
                     }
                     ABS_MT_POSITION_X if self.active_slot == 0 => {
-                        self.last_x = Self::scale_coordinate(ev.value, self.max_x, self.display_width);
+                        // Dynamically scale coordinate according to hardware bounds
+                        let val = ev.value.max(0);
+                        if self.max_x > 1220 {
+                            let scaled = (val as f64 / self.max_x as f64) * 1220.0;
+                            self.last_x = (scaled as i32).clamp(0, 1219);
+                        } else {
+                            self.last_x = val.clamp(0, 1219);
+                        }
                     }
                     ABS_MT_POSITION_Y if self.active_slot == 0 => {
-                        self.last_y = Self::scale_coordinate(ev.value, self.max_y, self.display_height);
+                        // Dynamically scale coordinate according to hardware bounds
+                        let val = ev.value.max(0);
+                        if self.max_y > 2712 {
+                            let scaled = (val as f64 / self.max_y as f64) * 2712.0;
+                            self.last_y = (scaled as i32).clamp(0, 2711);
+                        } else {
+                            self.last_y = val.clamp(0, 2711);
+                        }
                     }
                     ABS_MT_TRACKING_ID if self.active_slot == 0 => {
                         self.touch_state = if ev.value == -1 {
@@ -331,22 +353,5 @@ impl Drop for InputManager {
         if self.power_fd >= 0 {
             unsafe { libc::close(self.power_fd) };
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_scale_coordinate() {
-        let x = InputManager::scale_coordinate(500, 1000, 1220);
-        assert_eq!(x, 610);
-
-        let clamped_over = InputManager::scale_coordinate(1500, 1000, 1220);
-        assert_eq!(clamped_over, 1219);
-
-        let clamped_under = InputManager::scale_coordinate(-50, 1000, 1220);
-        assert_eq!(clamped_under, 0);
     }
 }

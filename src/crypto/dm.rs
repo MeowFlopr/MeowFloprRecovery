@@ -73,7 +73,7 @@ pub struct DmTargetSpec {
 }
 
 pub fn get_userdata_sectors() -> u64 {
-    let mut sectors = 492158912u64;
+    let mut sectors = 492158912u64; // Default ~250GB sectors for Xiaomi 14T 512GB
     let path = "/dev/block/by-name/userdata";
 
     if let Ok(file) = File::open(path) {
@@ -98,6 +98,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
+    // Ensure /dev/device-mapper node exists
     if !Path::new("/dev/device-mapper").exists() {
         let _ = fs::create_dir_all("/dev");
         unsafe {
@@ -115,6 +116,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
         .open("/dev/device-mapper")?;
     let dm_fd = dm_file.as_raw_fd();
 
+    // 1. DM_DEV_CREATE
     let mut io_create = DmIoctl::new(DM_DEV_NAME, 0, std::mem::size_of::<DmIoctl>());
     let ret = unsafe { libc::ioctl(dm_fd, DM_DEV_CREATE as _, &mut io_create) };
     if ret < 0 {
@@ -128,6 +130,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
         println!("[MRR-DM] DM_DEV_CREATE '{}' OK (dev=0x{:x})", DM_DEV_NAME, io_create.dev);
     }
 
+    // 2. DM_TABLE_LOAD
     let sectors = get_userdata_sectors();
     let params = format!(
         "aes-xts-plain64 {} 0 /dev/block/by-name/userdata 0 3 allow_discards sector_size:4096 iv_large_sectors\0",
@@ -142,7 +145,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
 
     let mut buf = vec![0u8; total_size];
 
-    let io_load = DmIoctl::new(DM_DEV_NAME, 0, total_size);
+    let io_load = DmIoctl::new(DM_DEV_NAME, DM_READONLY_FLAG, total_size);
     let mut spec = DmTargetSpec::default();
     spec.sector_start = 0;
     spec.length = sectors;
@@ -173,6 +176,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
             params_bytes.len(),
         );
 
+        // Update target_count = 1
         let io_ptr = buf.as_mut_ptr() as *mut DmIoctl;
         (*io_ptr).target_count = 1;
 
@@ -184,6 +188,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
         }
     }
 
+    // 3. DM_DEV_SUSPEND (Resume / Activate device)
     let mut io_resume = DmIoctl::new(DM_DEV_NAME, 0, std::mem::size_of::<DmIoctl>());
     let ret = unsafe { libc::ioctl(dm_fd, DM_DEV_SUSPEND as _, &mut io_resume) };
     if ret < 0 {
@@ -192,27 +197,13 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
         println!("[MRR-DM] DM_DEV_SUSPEND (resume) activated device!");
     }
 
+    // Wait slightly for kernel to register block device
     std::thread::sleep(std::time::Duration::from_millis(200));
 
+    // Ensure /dev/block/mapper/userdata symlink exists
     let _ = fs::create_dir_all("/dev/block/mapper");
     if !Path::new(&mapper_dev).exists() {
-        let dev_num = if io_resume.dev != 0 {
-            io_resume.dev
-        } else {
-            io_create.dev
-        };
-
-        if dev_num != 0 {
-            if let Ok(c_path) = std::ffi::CString::new(mapper_dev.clone()) {
-                unsafe {
-                    libc::mknod(
-                        c_path.as_ptr(),
-                        libc::S_IFBLK | 0o660,
-                        dev_num,
-                    );
-                }
-            }
-        } else if Path::new("/dev/block/dm-0").exists() {
+        if Path::new("/dev/block/dm-0").exists() {
             let _ = symlink("/dev/block/dm-0", &mapper_dev);
             println!("[MRR-DM] Created symlink /dev/block/dm-0 -> {}", mapper_dev);
         } else if let Ok(content) = fs::read_to_string("/sys/block/dm-0/dev") {

@@ -6,6 +6,7 @@ use super::text::FontRenderer;
 use super::theme::M3Theme;
 use crate::platform::TouchState;
 
+/// Material 3 Expressive Interactive Swipe-to-Confirm Slider
 #[derive(Debug, Clone)]
 pub struct SwipeSlider {
     pub x: f32,
@@ -13,8 +14,7 @@ pub struct SwipeSlider {
     pub width: f32,
     pub height: f32,
     pub label: String,
-    pub progress: f32,
-    pub drag_offset_x: f32,
+    pub progress: f32, // 0.0 .. 1.0
     pub is_dragging: bool,
     pub confirmed: bool,
     pub accent_color: Option<Color>,
@@ -30,7 +30,6 @@ impl SwipeSlider {
             height,
             label: label.to_string(),
             progress: 0.0,
-            drag_offset_x: 0.0,
             is_dragging: false,
             confirmed: false,
             accent_color: None,
@@ -50,13 +49,15 @@ impl SwipeSlider {
 
     pub fn reset(&mut self) {
         self.progress = 0.0;
-        self.drag_offset_x = 0.0;
         self.is_dragging = false;
         self.confirmed = false;
     }
 
+    /// Advances spring physics when user releases early.
+    /// Returns true if a frame re-render is needed.
     pub fn tick_spring(&mut self) -> bool {
         if !self.is_dragging && !self.confirmed && self.progress > 0.0 {
+            // Smooth organic exponential spring damping
             if self.progress < 0.03 {
                 self.progress = 0.0;
             } else {
@@ -67,6 +68,7 @@ impl SwipeSlider {
         false
     }
 
+    /// Handles touch input. Returns true ONLY when the slider is swiped to >= 85% and confirmed.
     pub fn handle_touch(&mut self, tx: i32, ty: i32, state: TouchState) -> bool {
         let fx = tx as f32;
         let fy = ty as f32;
@@ -77,10 +79,12 @@ impl SwipeSlider {
         let end_cx = self.x + self.width - padding - thumb_r;
         let travel = end_cx - start_cx;
 
+        // Expanded vertical hit-box (+-100px) for initiating drag
         let in_y_range = fy >= (self.y - 100.0) && fy <= (self.y + self.height + 100.0);
 
         match state {
             TouchState::Pressed => {
+                // If not currently dragging, check if user tapped near thumb or start of track
                 if !self.is_dragging {
                     if !in_y_range {
                         return false;
@@ -91,15 +95,15 @@ impl SwipeSlider {
                     let near_start = fx >= (self.x - 40.0) && fx <= (start_cx + 70.0);
                     if near_thumb || near_start {
                         self.is_dragging = true;
-                        self.drag_offset_x = fx - current_cx;
                     }
                 }
 
+                // If currently dragging, update progress smoothly (do not drop if user drifts vertically)
                 if self.is_dragging {
-                    let thumb_target_x = fx - self.drag_offset_x;
-                    let target_progress = ((thumb_target_x - start_cx) / travel).clamp(0.0, 1.0);
+                    let target_progress = ((fx - start_cx) / travel).clamp(0.0, 1.0);
                     self.progress = target_progress;
 
+                    // Trigger confirmation threshold: 85% of width (per spec)
                     if self.progress >= 0.85 {
                         self.progress = 1.0;
                         self.confirmed = true;
@@ -111,6 +115,7 @@ impl SwipeSlider {
             TouchState::Released => {
                 if self.is_dragging && !self.confirmed {
                     self.is_dragging = false;
+                    // Will snap back via tick_spring
                 }
             }
         }
@@ -140,6 +145,7 @@ impl SwipeSlider {
             theme.surface_container_high
         };
 
+        // 1. Background Track (Capsule Pill)
         canvas.draw_pill(
             self.x,
             self.y,
@@ -149,6 +155,7 @@ impl SwipeSlider {
             Some((theme.outline_variant, 1.5)),
         );
 
+        // 2. Active Progress Fill
         if self.progress > 0.02 {
             let fill_w = (current_cx - self.x + thumb_r + padding).clamp(self.height, self.width);
             let fill_alpha = if self.is_danger { 180 } else { 120 };
@@ -161,6 +168,7 @@ impl SwipeSlider {
             canvas.draw_pill(self.x, self.y, fill_w, self.height, fill_color, None);
         }
 
+        // 3. Central Hint Text (fades out as thumb advances)
         let label_alpha = ((1.0 - (self.progress * 1.4)).max(0.0) * 255.0) as u8;
         if label_alpha > 10 {
             let text_color = Color::from_rgba8(
@@ -176,6 +184,7 @@ impl SwipeSlider {
             fonts.draw_text(&mut canvas.pixmap, &self.label, text_x, text_y, text_size, text_color);
         }
 
+        // 4. Thumb Glow & Drag Elevation (when user holds it)
         let thumb_cy = self.y + (self.height / 2.0);
         if self.is_dragging {
             canvas.draw_circle(
@@ -191,6 +200,7 @@ impl SwipeSlider {
             );
         }
 
+        // 5. Thumb Circle / Squircle
         let thumb_fill = if self.is_danger {
             theme.error
         } else {
@@ -198,6 +208,7 @@ impl SwipeSlider {
         };
         canvas.draw_circle(current_cx, thumb_cy, thumb_r, thumb_fill);
 
+        // 6. Thumb Chevron Arrows Icon (inside circle)
         let on_thumb_color = if self.is_danger {
             Color::from_rgba8(96, 0, 0, 255)
         } else {
@@ -207,6 +218,7 @@ impl SwipeSlider {
         if self.confirmed {
             draw_icon(&mut canvas.pixmap, M3Icon::Check, current_cx, thumb_cy, thumb_r * 1.1, on_thumb_color);
         } else {
+            // Draw double chevron >>>
             draw_double_chevron(&mut canvas.pixmap, current_cx, thumb_cy, thumb_r * 0.9, on_thumb_color);
         }
     }
@@ -229,11 +241,13 @@ fn draw_double_chevron(pixmap: &mut PixmapMut, cx: f32, cy: f32, size: f32, colo
 
     let mut pb = PathBuilder::new();
 
+    // First chevron
     let c1_x = cx - s * 0.35;
     pb.move_to(c1_x - s * 0.25, cy - s * 0.55);
     pb.line_to(c1_x + s * 0.25, cy);
     pb.line_to(c1_x - s * 0.25, cy + s * 0.55);
 
+    // Second chevron
     let c2_x = cx + s * 0.35;
     pb.move_to(c2_x - s * 0.25, cy - s * 0.55);
     pb.line_to(c2_x + s * 0.25, cy);

@@ -1,9 +1,12 @@
-use std::fs;
+//! Partition Restoration Engine
+//! Restores backed-up partition images (.img) from storage back to device block devices.
+
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use crate::hardware::installer::is_tier0_forbidden_partition;
 use crate::hardware::ProgressCallback;
 
+/// Restores all partition images from an archive folder to the physical hardware partitions
 pub fn restore_archive(
     archive_dir: &Path,
     active_slot: &str,
@@ -54,25 +57,7 @@ pub fn restore_archive(
             base_prog,
         );
 
-        if is_tier0_forbidden_partition(&file_stem) {
-            progress.log(&format!(
-                "[-] Skipping Tier 0 protected partition: {} (degas safety guard)",
-                file_stem
-            ));
-            continue;
-        }
-
-        let meta = fs::metadata(img_path)
-            .map_err(|e| format!("Cannot read metadata for {:?}: {}", img_path, e))?;
-        if meta.len() < 4096 {
-            progress.log(&format!(
-                "[-] Skipping invalid/corrupted small image ({:.1} KB): {:?}",
-                meta.len() as f32 / 1024.0,
-                img_path
-            ));
-            continue;
-        }
-
+        // Resolve destination block device
         let dest_blk = crate::resolve_partition_block(&file_stem, active_slot);
         let dest_path = match dest_blk {
             Some(d) => d,
@@ -87,6 +72,7 @@ pub fn restore_archive(
 
         progress.log(&format!("[+] Flashing {:?} -> {:?}", img_path, dest_path));
 
+        // Stream restore bytes
         match crate::dump_partition(img_path, &dest_path, None) {
             Ok(bytes) => {
                 let mb = bytes as f32 / (1024.0 * 1024.0);

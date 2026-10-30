@@ -1,9 +1,10 @@
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::icons::{draw_icon, M3Icon};
 use super::text::FontRenderer;
-use super::theme::M3Theme;
+use super::theme::{M3Shapes, M3Theme};
+use crate::hardware::power::RebootTarget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerModalTarget {
@@ -33,12 +34,12 @@ impl Default for PowerModalMetrics {
     fn default() -> Self {
         let screen_w = 1220.0;
         let card_w = 1080.0;
-        let card_x = (screen_w - card_w) / 2.0;
+        let card_x = (screen_w - card_w) / 2.0; // 70.0
         let card_y = 520.0;
         let card_h = 1600.0;
 
-        let row_w = card_w - 96.0;
-        let row_x = card_x + 48.0;
+        let row_w = card_w - 96.0; // 984.0
+        let row_x = card_x + 48.0; // 118.0
         let row_h = 170.0;
         let row_gap = 24.0;
         let rows_start_y = card_y + 250.0;
@@ -67,16 +68,19 @@ pub fn hit_test(x: i32, y: i32) -> Option<PowerModalTarget> {
     let fx = x as f32;
     let fy = y as f32;
 
+    // Check if clicked outside modal card -> Close modal
     if fx < m.card_x || fx > m.card_x + m.card_w || fy < m.card_y || fy > m.card_y + m.card_h {
         return Some(PowerModalTarget::Close);
     }
 
+    // Top right close button (x: card_x + card_w - 120 .. card_x + card_w - 40, y: card_y + 40 .. card_y + 120)
     let close_x = m.card_x + m.card_w - 120.0;
     let close_y = m.card_y + 40.0;
     if fx >= close_x && fx <= close_x + 80.0 && fy >= close_y && fy <= close_y + 80.0 {
         return Some(PowerModalTarget::Close);
     }
 
+    // Check rows
     let row_targets = [
         PowerModalTarget::System,
         PowerModalTarget::Recovery,
@@ -92,6 +96,7 @@ pub fn hit_test(x: i32, y: i32) -> Option<PowerModalTarget> {
         }
     }
 
+    // Check Cancel button
     if fx >= m.row_x && fx <= m.row_x + m.row_w && fy >= m.cancel_y && fy <= m.cancel_y + m.cancel_h {
         return Some(PowerModalTarget::Close);
     }
@@ -107,6 +112,7 @@ pub fn render_power_modal(
 ) {
     let m = PowerModalMetrics::default();
 
+    // 1. Semi-transparent backdrop scrim (Dark Dimming)
     let scrim = Color::from_rgba8(0, 0, 0, 190);
     let mut scrim_paint = tiny_skia::Paint::default();
     scrim_paint.set_color(scrim);
@@ -117,6 +123,7 @@ pub fn render_power_modal(
         None,
     );
 
+    // 2. Elevated Modal Sheet
     canvas.draw_rounded_rect(
         m.card_x,
         m.card_y,
@@ -127,6 +134,7 @@ pub fn render_power_modal(
         Some((theme.outline_variant, 2.0)),
     );
 
+    // 3. Modal Header: Icon + Title + Subtitle
     let icon_cx = m.card_x + 96.0;
     let icon_cy = m.card_y + 110.0;
     canvas.draw_circle(icon_cx, icon_cy, 48.0, theme.primary_container);
@@ -150,11 +158,13 @@ pub fn render_power_modal(
         theme.on_surface_variant,
     );
 
+    // Close button (X) in top right
     let close_cx = m.card_x + m.card_w - 80.0;
     let close_cy = m.card_y + 80.0;
     canvas.draw_circle(close_cx, close_cy, 36.0, theme.surface_container_highest);
     draw_icon(&mut canvas.pixmap, M3Icon::Close, close_cx, close_cy, 36.0, theme.on_surface);
 
+    // 4. Action Rows (System, Recovery, Bootloader, FastbootD, PowerOff)
     struct RowInfo<'a> {
         target: PowerModalTarget,
         title: &'a str,
@@ -227,6 +237,7 @@ pub fn render_power_modal(
 
         canvas.draw_rounded_rect(m.row_x, ry, m.row_w, m.row_h, 32.0, Some(bg), stroke);
 
+        // Row Icon Container
         let row_icon_cx = m.row_x + 72.0;
         let row_icon_cy = ry + (m.row_h / 2.0);
         let icon_bg = if row.is_danger {
@@ -243,6 +254,7 @@ pub fn render_power_modal(
         };
         draw_icon(&mut canvas.pixmap, row.icon, row_icon_cx, row_icon_cy, 44.0, icon_fg);
 
+        // Titles
         let title_x = row_icon_cx + 64.0;
         let title_y = ry + 68.0;
         let title_fg = if is_pressed && row.is_danger {
@@ -263,6 +275,7 @@ pub fn render_power_modal(
         );
     }
 
+    // 5. Cancel Button at Bottom
     let cancel_pressed = pressed == Some(PowerModalTarget::Close);
     let cancel_bg = if cancel_pressed {
         theme.surface_container_high

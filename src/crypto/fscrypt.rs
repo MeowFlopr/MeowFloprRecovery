@@ -71,6 +71,7 @@ pub fn ensure_data_mounted(dm_key_hex: &str) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
+    // 1. Setup device-mapper default-key
     setup_dm_default_key(dm_key_hex)?;
 
     let mapper_dev = "/dev/block/mapper/userdata";
@@ -86,6 +87,7 @@ pub fn ensure_data_mounted(dm_key_hex: &str) -> Result<(), std::io::Error> {
     let rw_flags = libc::MS_NODEV | libc::MS_NOSUID;
     let ro_flags = libc::MS_RDONLY | libc::MS_NODEV | libc::MS_NOSUID;
 
+    // Try f2fs RW with inlinecrypt
     let ret = unsafe {
         libc::mount(
             c_dev.as_ptr(),
@@ -101,6 +103,7 @@ pub fn ensure_data_mounted(dm_key_hex: &str) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
+    // Try f2fs RO with inlinecrypt
     let ret_ro = unsafe {
         libc::mount(
             c_dev.as_ptr(),
@@ -122,6 +125,7 @@ pub fn ensure_data_mounted(dm_key_hex: &str) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
+    // Fallback: without inlinecrypt
     let ret_no_opt = unsafe {
         libc::mount(
             c_dev.as_ptr(),
@@ -137,6 +141,7 @@ pub fn ensure_data_mounted(dm_key_hex: &str) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
+    // Fallback: ext4
     let c_ext4 = CString::new("ext4").unwrap();
     let ret_ext4 = unsafe {
         libc::mount(
@@ -218,6 +223,7 @@ pub fn bind_mount_sdcard() -> Result<(), std::io::Error> {
         println!("[MRR-CRYPTO] Successfully bind-mounted /data/media/0 -> /sdcard!");
         Ok(())
     } else {
+        // Fallback to symlink
         if !Path::new("/sdcard").exists() {
             let _ = symlink("/data/media/0", "/sdcard");
             println!("[MRR-CRYPTO] Symlinked /data/media/0 -> /sdcard");

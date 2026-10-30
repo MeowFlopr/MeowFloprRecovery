@@ -42,19 +42,22 @@ pub fn hit_test(x: i32, y: i32) -> Option<ActionTarget> {
     let fy = y as f32;
     let margin = 40.0;
     let screen_w = 1220.0;
-    let content_w = screen_w - (margin * 2.0);
+    let content_w = screen_w - (margin * 2.0); // 1140.0
 
+    // 0. Top Decrypt Status Pill: y: 60..140, x: 40..290
     if fx >= margin && fx <= margin + 260.0 && fy >= 60.0 && fy <= 140.0 {
         return Some(ActionTarget::Decrypt);
     }
 
+    // 1. Hero Card: y: 170..510
     if fx >= margin && fx <= margin + content_w && fy >= 170.0 && fy <= 510.0 {
         return Some(ActionTarget::HeroCard);
     }
 
+    // 2. Action Bento Grid: y: 550..2142
     let grid_y = 550.0;
     let grid_gap = 24.0;
-    let card_w = (content_w - grid_gap) / 2.0;
+    let card_w = (content_w - grid_gap) / 2.0; // 558.0
     let card_h = 380.0;
 
     let targets = [
@@ -79,6 +82,7 @@ pub fn hit_test(x: i32, y: i32) -> Option<ActionTarget> {
         }
     }
 
+    // 3. Floating Bottom Dock: y: 2460..2580
     let dock_y = 2460.0;
     if fy >= dock_y && fy <= dock_y + 120.0 {
         let back_x = margin + 24.0;
@@ -115,8 +119,11 @@ pub fn render_dashboard(
     let lang = state.language;
     let screen_w = 1220.0;
     let margin = 40.0;
-    let content_w = screen_w - (margin * 2.0);
+    let content_w = screen_w - (margin * 2.0); // 1140.0
 
+    // =========================================================================
+    // 1. TOP STATUS BAR (y: 60 .. 150)
+    // =========================================================================
     let status_y = 70.0;
 
     let (dec_bg, dec_text, dec_icon_color) = if state.is_decrypted {
@@ -142,6 +149,7 @@ pub fn render_dashboard(
     draw_icon(&mut canvas.pixmap, M3Icon::Shield, margin + 35.0, status_y + 28.0, 24.0, dec_icon_color);
     fonts.draw_text(&mut canvas.pixmap, dec_text, margin + 65.0, status_y + 36.0, 18.0, dec_icon_color);
 
+    // Battery pill
     let bat_x = screen_w - margin - 260.0;
     canvas.draw_pill(
         bat_x,
@@ -155,6 +163,7 @@ pub fn render_dashboard(
     let bat_str = format!("{}%", state.battery_percent);
     fonts.draw_text(&mut canvas.pixmap, &bat_str, bat_x + 60.0, status_y + 36.0, 19.0, theme.on_surface);
 
+    // Time pill
     let time_x = screen_w - margin - 100.0;
     canvas.draw_pill(
         time_x,
@@ -166,6 +175,9 @@ pub fn render_dashboard(
     );
     fonts.draw_text(&mut canvas.pixmap, state.time_str, time_x + 22.0, status_y + 36.0, 19.0, theme.on_surface);
 
+    // =========================================================================
+    // 2. HERO CARD: Storage & Device Status (y: 170 .. 520, height = 340)
+    // =========================================================================
     let hero_y = 170.0;
     let hero_h = 340.0;
 
@@ -278,9 +290,12 @@ pub fn render_dashboard(
         theme.on_surface_variant,
     );
 
+    // =========================================================================
+    // 3. ACTION BENTO GRID (y: 550 .. 2350)
+    // =========================================================================
     let grid_y = 550.0;
     let grid_gap = 24.0;
-    let card_w = (content_w - grid_gap) / 2.0;
+    let card_w = (content_w - grid_gap) / 2.0; // 558.0 px
     let card_h = 380.0;
 
     let cards = match lang {
@@ -368,6 +383,9 @@ pub fn render_dashboard(
         );
     }
 
+    // =========================================================================
+    // 4. FLOATING BOTTOM DOCK (y: 2460 .. 2600, height = 120)
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 120.0;
 
@@ -380,6 +398,7 @@ pub fn render_dashboard(
         Some((theme.outline_variant, 1.5)),
     );
 
+    // Left Button: Back
     let back_x = margin + 24.0;
     let back_w = 280.0;
     let back_pressed = state.pressed_target == Some(ActionTarget::DockBack);
@@ -397,6 +416,7 @@ pub fn render_dashboard(
     };
     fonts.draw_text(&mut canvas.pixmap, back_str, back_x + 85.0, dock_y + 70.0, 22.0, theme.on_surface);
 
+    // Center Button: Terminal / Console
     let center_w = 420.0;
     let center_x = margin + (content_w - center_w) / 2.0;
     let terminal_pressed = state.pressed_target == Some(ActionTarget::DockTerminal);
@@ -415,6 +435,7 @@ pub fn render_dashboard(
     };
     fonts.draw_text(&mut canvas.pixmap, term_str, center_x + 130.0, dock_y + 70.0, 24.0, theme.on_primary);
 
+    // Right Button: Power / Reboot
     let pwr_x = screen_w - margin - 24.0 - 280.0;
     let pwr_pressed = state.pressed_target == Some(ActionTarget::DockPower);
     canvas.draw_pill(

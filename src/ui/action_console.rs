@@ -1,5 +1,5 @@
 use std::time::Instant;
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::icons::{draw_icon, M3Icon};
@@ -20,7 +20,7 @@ pub enum ActionConsoleTarget {
 pub struct ActionConsoleState {
     pub title: String,
     pub current_step: String,
-    pub progress: f32,
+    pub progress: f32, // 0.0 .. 1.0
     pub logs: Vec<String>,
     pub is_running: bool,
     pub is_finished: bool,
@@ -149,24 +149,30 @@ pub fn hit_test(x: i32, y: i32, state: &ActionConsoleState) -> Option<ActionCons
     let fx = x as f32;
     let fy = y as f32;
 
+    // Bottom Action Buttons: y: 2460 .. 2580
     if fy >= 2460.0 && fy <= 2580.0 {
+        // Button 1: Back to Dashboard (x: 40..340)
         if fx >= 40.0 && fx <= 340.0 {
             return Some(ActionConsoleTarget::BackToDashboard);
         }
 
+        // Button 2: Copy Log (x: 360..590)
         if fx >= 360.0 && fx <= 590.0 {
             return Some(ActionConsoleTarget::CopyLog);
         }
 
+        // Button 3: Clear Log (x: 610..770)
         if fx >= 610.0 && fx <= 770.0 {
             return Some(ActionConsoleTarget::ClearLog);
         }
 
+        // Button 4: Reboot System (x: 790..1180) (if finished)
         if fx >= 790.0 && fx <= 1180.0 && state.is_finished {
             return Some(ActionConsoleTarget::RebootSystem);
         }
     }
 
+    // Scroll areas
     if fy >= 380.0 && fy <= 1400.0 && fx >= 40.0 && fx <= 1180.0 {
         return Some(ActionConsoleTarget::ScrollUp);
     }
@@ -188,8 +194,11 @@ pub fn render_action_console(
 
     let screen_w = 1220.0;
     let margin = 40.0;
-    let content_w = screen_w - (margin * 2.0);
+    let content_w = screen_w - (margin * 2.0); // 1140.0
 
+    // =========================================================================
+    // 1. TOP HEADER & STATUS
+    // =========================================================================
     let header_y = 70.0;
     let icon_cx = margin + 44.0;
     let icon_cy = header_y + 45.0;
@@ -208,6 +217,9 @@ pub fn render_action_console(
     fonts.draw_text(&mut canvas.pixmap, &state.title, icon_cx + 64.0, icon_cy - 4.0, 36.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, &state.current_step, icon_cx + 64.0, icon_cy + 34.0, 22.0, theme.on_surface_variant);
 
+    // =========================================================================
+    // 2. PROGRESS BAR & STATUS PILL (y: 190 .. 340)
+    // =========================================================================
     let pbar_y = 200.0;
     let pbar_h = 28.0;
     let pbar_color = if state.is_success { theme.primary } else { theme.error };
@@ -222,6 +234,7 @@ pub fn render_action_console(
         pbar_color,
     );
 
+    // Status pill
     let pill_y = 250.0;
     let (pill_bg, pill_fg, pill_txt) = if state.is_running {
         (theme.surface_container_high, theme.primary, format!("EXECUTING... {:.0}%", state.progress * 100.0))
@@ -238,6 +251,9 @@ pub fn render_action_console(
     let cw = fonts.measure_text(&count_str, 20.0);
     fonts.draw_text(&mut canvas.pixmap, &count_str, screen_w - margin - cw, pill_y + 40.0, 20.0, theme.on_surface_variant);
 
+    // =========================================================================
+    // 3. LOG VIEWPORT (y: 350 .. 2420)
+    // =========================================================================
     let log_y = 340.0;
     let log_h = 2080.0;
 
@@ -251,9 +267,10 @@ pub fn render_action_console(
         Some((theme.outline_variant, 1.0)),
     );
 
+    // Text rendering inside log box
     let line_height = 36.0;
     let font_size = 21.0;
-    let max_visible_lines = ((log_h - 60.0) / line_height) as usize;
+    let max_visible_lines = ((log_h - 60.0) / line_height) as usize; // ~56 lines
 
     let total_lines = state.logs.len();
     let display_start = if total_lines <= max_visible_lines {
@@ -282,6 +299,7 @@ pub fn render_action_console(
             Color::from_rgba8(200, 205, 220, 255)
         };
 
+        // Trim line if too long for screen
         let trimmed = if line.len() > 70 {
             format!("{}...", &line[..67])
         } else {
@@ -291,9 +309,13 @@ pub fn render_action_console(
         fonts.draw_text(&mut canvas.pixmap, &trimmed, margin + 28.0, ly, font_size, line_color);
     }
 
+    // =========================================================================
+    // 4. BOTTOM ACTION BAR (y: 2460 .. 2580)
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 100.0;
 
+    // 1. Back to Dashboard Pill (w: 300)
     let back_w = 300.0;
     let is_back_pressed = pressed == Some(ActionConsoleTarget::BackToDashboard);
     canvas.draw_pill(
@@ -308,6 +330,7 @@ pub fn render_action_console(
     let bw = fonts.measure_text(back_lbl, 24.0);
     fonts.draw_text(&mut canvas.pixmap, back_lbl, margin + (back_w - bw) / 2.0, dock_y + 58.0, 24.0, theme.on_surface);
 
+    // 2. Copy Log Pill (w: 230)
     let copy_x = margin + back_w + 16.0;
     let copy_w = 230.0;
     let is_copy_pressed = pressed == Some(ActionConsoleTarget::CopyLog);
@@ -323,6 +346,7 @@ pub fn render_action_console(
     let cw = fonts.measure_text(copy_lbl, 22.0);
     fonts.draw_text(&mut canvas.pixmap, copy_lbl, copy_x + (copy_w - cw) / 2.0, dock_y + 58.0, 22.0, theme.on_surface);
 
+    // 3. Clear Log Pill (w: 170)
     let clear_x = copy_x + copy_w + 16.0;
     let clear_w = 170.0;
     let is_clear_pressed = pressed == Some(ActionConsoleTarget::ClearLog);
@@ -338,6 +362,7 @@ pub fn render_action_console(
     let clrw = fonts.measure_text(clr_lbl, 22.0);
     fonts.draw_text(&mut canvas.pixmap, clr_lbl, clear_x + (clear_w - clrw) / 2.0, dock_y + 58.0, 22.0, theme.on_surface);
 
+    // 4. Reboot System Pill (if finished)
     if state.is_finished {
         let reboot_x = clear_x + clear_w + 16.0;
         let reboot_w = screen_w - margin - reboot_x;

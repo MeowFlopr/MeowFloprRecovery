@@ -4,17 +4,18 @@ use tiny_skia::{Path, PathBuilder};
 pub enum M3ShapeType {
     Circle,
     Squircle,
-    Cookie4,
-    Sunny8,
-    Clover4,
-    PuffyCloud,
-    Clamshell,
-    ElongatedArch,
+    Cookie4,   // Iconic Android 15/16 4-sided cookie / clover widget
+    Sunny8,    // 8-point smooth scalloped sun
+    Clover4,   // 4-leaf organic clover
+    PuffyCloud,// 6-point fluffy cloud
+    Clamshell, // Rounded chamfered gem
+    ElongatedArch, // Taller, elongated vertical arch (for Wipe)
 }
 
 pub struct ShapeRenderer;
 
 impl ShapeRenderer {
+    /// Generates a smooth vector Path for any Material 3 Expressive shape
     pub fn build_shape(shape: M3ShapeType, cx: f32, cy: f32, size: f32) -> Option<Path> {
         let r = size / 2.0;
         let mut pb = PathBuilder::new();
@@ -113,18 +114,23 @@ impl ShapeRenderer {
                 pb.close();
             }
             M3ShapeType::ElongatedArch => {
+                // Taller, elongated vertical arch (narrower width, extended height)
                 let w = size * 0.80;
                 let h = size * 1.18;
                 let x = cx - w / 2.0;
                 let y = cy - h / 2.0;
-                let arch_r = w / 2.0;
+                let arch_r = w / 2.0; // Semicircular dome top
                 let bot_corner = 18.0;
 
+                // Start bottom-left
                 pb.move_to(x + bot_corner, y + h);
                 pb.line_to(x + w - bot_corner, y + h);
                 pb.quad_to(x + w, y + h, x + w, y + h - bot_corner);
+                // Up right side
                 pb.line_to(x + w, y + arch_r);
+                // Top arch
                 pb.cubic_to(x + w, y, x, y, x, y + arch_r);
+                // Down left side
                 pb.line_to(x, y + h - bot_corner);
                 pb.quad_to(x, y + h, x + bot_corner, y + h);
                 pb.close();

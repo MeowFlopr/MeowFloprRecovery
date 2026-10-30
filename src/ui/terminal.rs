@@ -1,5 +1,5 @@
 use std::process::Command;
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::i18n::Language;
@@ -34,7 +34,7 @@ pub enum KeyboardMode {
 pub struct TerminalState {
     pub lines: Vec<String>,
     pub input_buffer: String,
-    pub scroll_offset: usize,
+    pub scroll_offset: usize, // 0 = at bottom
     pub max_lines: usize,
     pub kb_mode: KeyboardMode,
     pub last_touch_y: Option<f32>,
@@ -67,24 +67,30 @@ impl Default for TerminalState {
     }
 }
 
+// Layout Dimensions
 pub const TERM_MARGIN: f32 = 30.0;
 pub const TERM_WIDTH: f32 = 1220.0;
-pub const CONTENT_W: f32 = TERM_WIDTH - (TERM_MARGIN * 2.0);
+pub const CONTENT_W: f32 = TERM_WIDTH - (TERM_MARGIN * 2.0); // 1160.0
 
+// Output Window: y = 170.0 .. 1560.0 (Height: 1390.0)
 pub const CONSOLE_TOP: f32 = 170.0;
 pub const CONSOLE_BOTTOM: f32 = 1560.0;
 pub const CONSOLE_H: f32 = CONSOLE_BOTTOM - CONSOLE_TOP;
 
+// Quick Chips Bar: y = 1575.0 .. 1645.0 (Height: 70.0)
 pub const CHIPS_Y: f32 = 1575.0;
 pub const CHIPS_H: f32 = 70.0;
 
+// Command Line Input Bar: y = 1655.0 .. 1735.0 (Height: 80.0)
 pub const INPUT_Y: f32 = 1655.0;
 pub const INPUT_H: f32 = 80.0;
 
+// Virtual Keyboard: y = 1750.0 .. 2520.0 (Height: 770.0, 5 rows)
 pub const KB_Y: f32 = 1750.0;
 pub const KB_ROW_H: f32 = 88.0;
 pub const KB_GAP_Y: f32 = 10.0;
 
+// Bottom Navigation Dock: y = 2540.0 .. 2650.0 (Height: 110.0)
 pub const TERM_DOCK_Y: f32 = 2540.0;
 pub const TERM_DOCK_H: f32 = 110.0;
 
@@ -101,6 +107,7 @@ impl TerminalState {
 
         self.lines.push(format!("degas:/ # {}", trimmed));
 
+        // Built-in commands
         if trimmed == "clear" {
             self.lines.clear();
             self.scroll_offset = 0;
@@ -116,66 +123,27 @@ impl TerminalState {
             "sh"
         };
 
-        let mut child = match Command::new(shell)
-            .arg("-c")
-            .arg(trimmed)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
+        match Command::new(shell).arg("-c").arg(trimmed).output() {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    self.lines.push(line.to_string());
+                }
+
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                for line in stderr.lines() {
+                    self.lines.push(format!("[STDERR] {}", line));
+                }
+
+                if !output.status.success() {
+                    if let Some(code) = output.status.code() {
+                        self.lines.push(format!("[Exit code: {}]", code));
+                    }
+                }
+            }
             Err(e) => {
                 self.lines.push(format!("[EXEC ERROR] {}", e));
-                self.input_buffer.clear();
-                return;
             }
-        };
-
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
-        let mut finished = false;
-
-        while start.elapsed() < timeout {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    finished = true;
-                    if let Some(mut stdout) = child.stdout.take() {
-                        let mut buf = String::new();
-                        use std::io::Read;
-                        let _ = stdout.read_to_string(&mut buf);
-                        for line in buf.lines() {
-                            self.lines.push(line.to_string());
-                        }
-                    }
-                    if let Some(mut stderr) = child.stderr.take() {
-                        let mut buf = String::new();
-                        use std::io::Read;
-                        let _ = stderr.read_to_string(&mut buf);
-                        for line in buf.lines() {
-                            self.lines.push(format!("[STDERR] {}", line));
-                        }
-                    }
-                    if !status.success() {
-                        if let Some(code) = status.code() {
-                            self.lines.push(format!("[Exit code: {}]", code));
-                        }
-                    }
-                    break;
-                }
-                Ok(None) => {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                Err(e) => {
-                    self.lines.push(format!("[WAIT ERROR] {}", e));
-                    break;
-                }
-            }
-        }
-
-        if !finished {
-            let _ = child.kill();
-            let _ = child.wait();
-            self.lines.push("[TIMEOUT] Command execution timed out (5s limit)".to_string());
         }
 
         if self.lines.len() > self.max_lines {
@@ -206,10 +174,13 @@ impl TerminalState {
         let fx = tx as f32;
         let fy = ty as f32;
 
+        // 1. Top App Bar Buttons (Back & Clear)
         if state == TouchState::Released {
+            // Back: x: 30..150, y: 50..150
             if fx >= 30.0 && fx <= 150.0 && fy >= 50.0 && fy <= 150.0 {
                 return Some(TerminalAction::Back);
             }
+            // Clear: x: 1040..1190, y: 50..150
             if fx >= 1040.0 && fx <= 1190.0 && fy >= 50.0 && fy <= 150.0 {
                 self.lines.clear();
                 self.scroll_offset = 0;
@@ -217,6 +188,7 @@ impl TerminalState {
             }
         }
 
+        // 2. Drag scrolling in Console Output window (CONSOLE_TOP .. CONSOLE_BOTTOM)
         if fy >= CONSOLE_TOP && fy <= CONSOLE_BOTTOM && fx >= TERM_MARGIN && fx <= TERM_MARGIN + CONTENT_W {
             match state {
                 TouchState::Pressed => {
@@ -225,8 +197,10 @@ impl TerminalState {
                         if delta.abs() > 15.0 {
                             let lines_delta = (delta.abs() / 24.0).round() as usize;
                             if delta > 0.0 {
+                                // Drag down -> scroll up to older lines
                                 self.scroll_up(lines_delta.max(1));
                             } else {
+                                // Drag up -> scroll down to newer lines
                                 self.scroll_down(lines_delta.max(1));
                             }
                             self.last_touch_y = Some(fy);
@@ -253,6 +227,7 @@ impl TerminalState {
             return None;
         }
 
+        // 3. Quick Chips Bar (CHIPS_Y .. CHIPS_Y + CHIPS_H)
         if fy >= CHIPS_Y && fy <= CHIPS_Y + CHIPS_H {
             let chips = [
                 ("ls -la", "ls -la"),
@@ -275,7 +250,9 @@ impl TerminalState {
             }
         }
 
+        // 4. Command Input Bar Tap (Execute if tap right side, or clear if tap X)
         if fy >= INPUT_Y && fy <= INPUT_Y + INPUT_H {
+            // Tap Run Button inside input bar (rightmost 140px)
             if fx >= TERM_WIDTH - TERM_MARGIN - 140.0 && fx <= TERM_WIDTH - TERM_MARGIN {
                 let cmd = self.input_buffer.clone();
                 self.execute(&cmd);
@@ -283,6 +260,7 @@ impl TerminalState {
             }
         }
 
+        // 5. Virtual Keyboard (KB_Y .. KB_Y + (KB_ROW_H + KB_GAP_Y) * 5)
         if fy >= KB_Y && fy <= KB_Y + (KB_ROW_H + KB_GAP_Y) * 5.0 {
             let row_idx = ((fy - KB_Y) / (KB_ROW_H + KB_GAP_Y)) as usize;
             let rel_y = (fy - KB_Y) - (row_idx as f32 * (KB_ROW_H + KB_GAP_Y));
@@ -292,6 +270,7 @@ impl TerminalState {
                     KeyboardMode::AlphaLower | KeyboardMode::AlphaUpper => {
                         let is_upper = self.kb_mode == KeyboardMode::AlphaUpper;
                         match row_idx {
+                            // Row 0: Numbers 1 2 3 4 5 6 7 8 9 0
                             0 => {
                                 let keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
                                 let key_gap = 8.0;
@@ -304,6 +283,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 1: q w e r t y u i o p
                             1 => {
                                 let keys_l = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
                                 let keys_u = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'];
@@ -318,6 +298,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 2: a s d f g h j k l
                             2 => {
                                 let keys_l = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
                                 let keys_u = ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'];
@@ -335,6 +316,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 3: Shift(1.5x) z x c v b n m Bksp(1.5x)
                             3 => {
                                 let key_gap = 8.0;
                                 let unit_w = (CONTENT_W - (key_gap * 8.0)) / 10.0;
@@ -342,6 +324,7 @@ impl TerminalState {
                                 let bksp_w = unit_w * 1.5;
                                 let mid_w = (CONTENT_W - shift_w - bksp_w - (key_gap * 8.0)) / 7.0;
 
+                                // Shift Key
                                 if fx >= TERM_MARGIN && fx <= TERM_MARGIN + shift_w {
                                     self.kb_mode = if is_upper {
                                         KeyboardMode::AlphaLower
@@ -351,6 +334,7 @@ impl TerminalState {
                                     return Some(TerminalAction::ToggleShift);
                                 }
 
+                                // z x c v b n m
                                 let keys_l = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
                                 let keys_u = ['Z', 'X', 'C', 'V', 'B', 'N', 'M'];
                                 let keys = if is_upper { keys_u } else { keys_l };
@@ -363,12 +347,14 @@ impl TerminalState {
                                     }
                                 }
 
+                                // Backspace Key
                                 let bk_x = TERM_WIDTH - TERM_MARGIN - bksp_w;
                                 if fx >= bk_x && fx <= bk_x + bksp_w {
                                     self.input_buffer.pop();
                                     return Some(TerminalAction::KeyBackspace);
                                 }
                             }
+                            // Row 4: Sym(?123), /, Space(4x), -, ., Enter(2x)
                             4 => {
                                 let key_gap = 8.0;
                                 let sym_w = 140.0;
@@ -380,36 +366,42 @@ impl TerminalState {
 
                                 let mut cur_x = TERM_MARGIN;
 
+                                // ?123 key
                                 if fx >= cur_x && fx <= cur_x + sym_w {
                                     self.kb_mode = KeyboardMode::Symbols;
                                     return Some(TerminalAction::ToggleSymbols);
                                 }
                                 cur_x += sym_w + key_gap;
 
+                                // '/' key
                                 if fx >= cur_x && fx <= cur_x + slash_w {
                                     self.input_buffer.push('/');
                                     return Some(TerminalAction::KeyChar('/'));
                                 }
                                 cur_x += slash_w + key_gap;
 
+                                // Space key
                                 if fx >= cur_x && fx <= cur_x + space_w {
                                     self.input_buffer.push(' ');
                                     return Some(TerminalAction::KeySpace);
                                 }
                                 cur_x += space_w + key_gap;
 
+                                // '-' key
                                 if fx >= cur_x && fx <= cur_x + minus_w {
                                     self.input_buffer.push('-');
                                     return Some(TerminalAction::KeyChar('-'));
                                 }
                                 cur_x += minus_w + key_gap;
 
+                                // '.' key
                                 if fx >= cur_x && fx <= cur_x + dot_w {
                                     self.input_buffer.push('.');
                                     return Some(TerminalAction::KeyChar('.'));
                                 }
                                 cur_x += dot_w + key_gap;
 
+                                // Enter key
                                 if fx >= cur_x && fx <= cur_x + enter_w {
                                     let cmd = self.input_buffer.clone();
                                     self.execute(&cmd);
@@ -420,7 +412,9 @@ impl TerminalState {
                         }
                     }
                     KeyboardMode::Symbols => {
+                        // Symbols keyboard layout
                         match row_idx {
+                            // Row 0: ` ~ ! @ # $ % ^ & *
                             0 => {
                                 let syms = ['`', '~', '!', '@', '#', '$', '%', '^', '&', '*'];
                                 let key_gap = 8.0;
@@ -433,6 +427,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 1: ( ) - _ = + [ ] { }
                             1 => {
                                 let syms = ['(', ')', '-', '_', '=', '+', '[', ']', '{', '}'];
                                 let key_gap = 8.0;
@@ -445,6 +440,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 2: | \ : ; " ' < > , .
                             2 => {
                                 let syms = ['|', '\\', ':', ';', '"', '\'', '<', '>', ',', '.'];
                                 let key_gap = 8.0;
@@ -457,6 +453,7 @@ impl TerminalState {
                                     }
                                 }
                             }
+                            // Row 3: ABC(1.5x) ? / * = & $ % Bksp(1.5x)
                             3 => {
                                 let key_gap = 8.0;
                                 let unit_w = (CONTENT_W - (key_gap * 8.0)) / 10.0;
@@ -464,6 +461,7 @@ impl TerminalState {
                                 let bksp_w = unit_w * 1.5;
                                 let mid_w = (CONTENT_W - abc_w - bksp_w - (key_gap * 8.0)) / 7.0;
 
+                                // ABC toggle key
                                 if fx >= TERM_MARGIN && fx <= TERM_MARGIN + abc_w {
                                     self.kb_mode = KeyboardMode::AlphaLower;
                                     return Some(TerminalAction::ToggleSymbols);
@@ -478,12 +476,14 @@ impl TerminalState {
                                     }
                                 }
 
+                                // Bksp
                                 let bk_x = TERM_WIDTH - TERM_MARGIN - bksp_w;
                                 if fx >= bk_x && fx <= bk_x + bksp_w {
                                     self.input_buffer.pop();
                                     return Some(TerminalAction::KeyBackspace);
                                 }
                             }
+                            // Row 4: ABC, Space, Enter
                             4 => {
                                 let key_gap = 8.0;
                                 let abc_w = 140.0;
@@ -511,24 +511,29 @@ impl TerminalState {
             }
         }
 
+        // 6. Bottom Dock Controls (Scroll Up, Scroll Down, Scroll to Bottom, Back)
         if fy >= TERM_DOCK_Y && fy <= TERM_DOCK_Y + TERM_DOCK_H {
             let dock_gap = 12.0;
             let dock_w = (CONTENT_W - (dock_gap * 3.0)) / 4.0;
 
+            // Back (0)
             let b_x = TERM_MARGIN;
             if fx >= b_x && fx <= b_x + dock_w {
                 return Some(TerminalAction::Back);
             }
+            // Scroll Up (1)
             let su_x = b_x + dock_w + dock_gap;
             if fx >= su_x && fx <= su_x + dock_w {
                 self.scroll_up(20);
                 return Some(TerminalAction::ScrollUp);
             }
+            // Scroll Down (2)
             let sd_x = su_x + dock_w + dock_gap;
             if fx >= sd_x && fx <= sd_x + dock_w {
                 self.scroll_down(20);
                 return Some(TerminalAction::ScrollDown);
             }
+            // Bottom (3)
             let bt_x = sd_x + dock_w + dock_gap;
             if fx >= bt_x && fx <= bt_x + dock_w {
                 self.scroll_offset = 0;
@@ -547,8 +552,12 @@ pub fn render_terminal(
     state: &TerminalState,
     lang: Language,
 ) {
+    // OLED deep black background
     canvas.clear(Color::from_rgba8(8, 9, 12, 255));
 
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = TERM_MARGIN + 44.0;
     let back_cy = 110.0;
     canvas.draw_circle(back_cx, back_cy, 44.0, theme.surface_container_high);
@@ -562,6 +571,7 @@ pub fn render_terminal(
     fonts.draw_text(&mut canvas.pixmap, title, back_cx + 64.0, back_cy - 4.0, 36.0, theme.on_surface);
     fonts.draw_text(&mut canvas.pixmap, subtitle, back_cx + 64.0, back_cy + 34.0, 20.0, theme.primary);
 
+    // Clear Button in Top Right
     let clr_w = 150.0;
     let clr_x = TERM_WIDTH - TERM_MARGIN - clr_w;
     canvas.draw_pill(clr_x, 70.0, clr_w, 75.0, theme.surface_container_high, Some((theme.outline_variant, 1.0)));
@@ -572,6 +582,9 @@ pub fn render_terminal(
     let cw = fonts.measure_text(clr_lbl, 22.0);
     fonts.draw_text(&mut canvas.pixmap, clr_lbl, clr_x + (clr_w - cw) / 2.0, 116.0, 22.0, theme.on_surface);
 
+    // =========================================================================
+    // 2. CONSOLE OUTPUT WINDOW (CONSOLE_TOP .. CONSOLE_BOTTOM)
+    // =========================================================================
     canvas.draw_rounded_rect(
         TERM_MARGIN,
         CONSOLE_TOP,
@@ -582,8 +595,9 @@ pub fn render_terminal(
         Some((theme.outline_variant, 1.5)),
     );
 
+    // Render terminal text lines
     let line_h = 32.0;
-    let visible_lines_count = ((CONSOLE_H - 40.0) / line_h) as usize;
+    let visible_lines_count = ((CONSOLE_H - 40.0) / line_h) as usize; // ~42 lines
     let total_lines = state.lines.len();
 
     let end_idx = total_lines.saturating_sub(state.scroll_offset);
@@ -604,6 +618,7 @@ pub fn render_terminal(
                 Color::from_rgba8(220, 224, 230, 255)
             };
 
+            // Truncate long lines to prevent canvas overflow
             let display_txt = if line.len() > 72 {
                 format!("{}...", &line[..69])
             } else {
@@ -615,6 +630,7 @@ pub fn render_terminal(
         }
     }
 
+    // Scrollbar indicator
     if total_lines > visible_lines_count {
         let scroll_track_h = CONSOLE_H - 40.0;
         let thumb_h = (visible_lines_count as f32 / total_lines as f32 * scroll_track_h).clamp(40.0, scroll_track_h);
@@ -625,6 +641,9 @@ pub fn render_terminal(
         canvas.draw_pill(TERM_WIDTH - TERM_MARGIN - 14.0, thumb_y, 8.0, thumb_h, theme.primary, None);
     }
 
+    // =========================================================================
+    // 3. QUICK CHIPS BAR (CHIPS_Y .. CHIPS_Y + CHIPS_H)
+    // =========================================================================
     let chips = ["ls -la", "df -h", "mount", "ps -ef", "dmesg", "reboot"];
     let chip_gap = 10.0;
     let chip_w = (CONTENT_W - (chip_gap * (chips.len() as f32 - 1.0))) / chips.len() as f32;
@@ -636,6 +655,9 @@ pub fn render_terminal(
         fonts.draw_text(&mut canvas.pixmap, label, cx + (chip_w - nw) / 2.0, CHIPS_Y + 43.0, 20.0, theme.primary);
     }
 
+    // =========================================================================
+    // 4. COMMAND INPUT BAR (INPUT_Y .. INPUT_Y + INPUT_H)
+    // =========================================================================
     canvas.draw_rounded_rect(
         TERM_MARGIN,
         INPUT_Y,
@@ -646,6 +668,7 @@ pub fn render_terminal(
         Some((theme.primary, 2.0)),
     );
 
+    // Prompt & Input Text
     let prompt_txt = "degas:/ # ";
     fonts.draw_text(&mut canvas.pixmap, prompt_txt, TERM_MARGIN + 24.0, INPUT_Y + 49.0, 22.0, theme.primary);
     let pw = fonts.measure_text(prompt_txt, 22.0);
@@ -653,6 +676,7 @@ pub fn render_terminal(
     let input_display = format!("{}_", state.input_buffer);
     fonts.draw_text(&mut canvas.pixmap, &input_display, TERM_MARGIN + 24.0 + pw, INPUT_Y + 49.0, 22.0, theme.on_surface);
 
+    // Run Button in Input Bar
     let run_w = 120.0;
     let run_x = TERM_WIDTH - TERM_MARGIN - run_w - 10.0;
     canvas.draw_pill(run_x, INPUT_Y + 8.0, run_w, INPUT_H - 16.0, theme.primary, None);
@@ -660,10 +684,14 @@ pub fn render_terminal(
     let rw = fonts.measure_text(run_lbl, 21.0);
     fonts.draw_text(&mut canvas.pixmap, run_lbl, run_x + (run_w - rw) / 2.0, INPUT_Y + 49.0, 21.0, theme.on_primary);
 
+    // =========================================================================
+    // 5. ON-SCREEN TOUCH VIRTUAL KEYBOARD (KB_Y .. KB_Y + (KB_ROW_H + KB_GAP_Y)*5)
+    // =========================================================================
     match state.kb_mode {
         KeyboardMode::AlphaLower | KeyboardMode::AlphaUpper => {
             let is_upper = state.kb_mode == KeyboardMode::AlphaUpper;
 
+            // Row 0: 1 2 3 4 5 6 7 8 9 0
             {
                 let keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
                 let key_gap = 8.0;
@@ -678,6 +706,7 @@ pub fn render_terminal(
                 }
             }
 
+            // Row 1: q w e r t y u i o p
             {
                 let keys_l = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'];
                 let keys_u = ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'];
@@ -694,6 +723,7 @@ pub fn render_terminal(
                 }
             }
 
+            // Row 2: a s d f g h j k l
             {
                 let keys_l = ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'];
                 let keys_u = ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'];
@@ -713,6 +743,7 @@ pub fn render_terminal(
                 }
             }
 
+            // Row 3: Shift(1.5x) z x c v b n m Bksp(1.5x)
             {
                 let key_gap = 8.0;
                 let unit_w = (CONTENT_W - (key_gap * 8.0)) / 10.0;
@@ -721,6 +752,7 @@ pub fn render_terminal(
                 let mid_w = (CONTENT_W - shift_w - bksp_w - (key_gap * 8.0)) / 7.0;
                 let y = KB_Y + (KB_ROW_H + KB_GAP_Y) * 3.0;
 
+                // Shift key
                 let shift_bg = if is_upper { theme.primary } else { theme.surface_container_highest };
                 let shift_fg = if is_upper { theme.on_primary } else { theme.on_surface };
                 canvas.draw_rounded_rect(TERM_MARGIN, y, shift_w, KB_ROW_H, 16.0, Some(shift_bg), Some((theme.outline_variant, 1.0)));
@@ -728,6 +760,7 @@ pub fn render_terminal(
                 let sw = fonts.measure_text(sh_lbl, 20.0);
                 fonts.draw_text(&mut canvas.pixmap, sh_lbl, TERM_MARGIN + (shift_w - sw) / 2.0, y + 53.0, 20.0, shift_fg);
 
+                // z x c v b n m
                 let keys_l = ['z', 'x', 'c', 'v', 'b', 'n', 'm'];
                 let keys_u = ['Z', 'X', 'C', 'V', 'B', 'N', 'M'];
                 let keys = if is_upper { keys_u } else { keys_l };
@@ -740,6 +773,7 @@ pub fn render_terminal(
                     fonts.draw_text(&mut canvas.pixmap, &ch_s, kx + (mid_w - cw) / 2.0, y + 54.0, 24.0, theme.on_surface);
                 }
 
+                // Backspace key
                 let bk_x = TERM_WIDTH - TERM_MARGIN - bksp_w;
                 canvas.draw_rounded_rect(bk_x, y, bksp_w, KB_ROW_H, 16.0, Some(theme.surface_container_highest), Some((theme.outline_variant, 1.0)));
                 let bk_lbl = "DEL";
@@ -747,6 +781,7 @@ pub fn render_terminal(
                 fonts.draw_text(&mut canvas.pixmap, bk_lbl, bk_x + (bksp_w - bw) / 2.0, y + 53.0, 21.0, theme.on_surface);
             }
 
+            // Row 4: ?123, /, Space, -, ., Enter
             {
                 let key_gap = 8.0;
                 let sym_w = 140.0;
@@ -759,30 +794,36 @@ pub fn render_terminal(
 
                 let mut cur_x = TERM_MARGIN;
 
+                // ?123
                 canvas.draw_rounded_rect(cur_x, y, sym_w, KB_ROW_H, 16.0, Some(theme.surface_container_highest), Some((theme.outline_variant, 1.0)));
                 let s_lbl = "?123";
                 let sw = fonts.measure_text(s_lbl, 22.0);
                 fonts.draw_text(&mut canvas.pixmap, s_lbl, cur_x + (sym_w - sw) / 2.0, y + 53.0, 22.0, theme.on_surface);
                 cur_x += sym_w + key_gap;
 
+                // '/'
                 canvas.draw_rounded_rect(cur_x, y, slash_w, KB_ROW_H, 16.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.0)));
                 fonts.draw_text(&mut canvas.pixmap, "/", cur_x + 36.0, y + 54.0, 24.0, theme.on_surface);
                 cur_x += slash_w + key_gap;
 
+                // Space
                 canvas.draw_rounded_rect(cur_x, y, space_w, KB_ROW_H, 16.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.0)));
                 let sp_lbl = "SPACE";
                 let sp_w = fonts.measure_text(sp_lbl, 20.0);
                 fonts.draw_text(&mut canvas.pixmap, sp_lbl, cur_x + (space_w - sp_w) / 2.0, y + 53.0, 20.0, theme.on_surface_variant);
                 cur_x += space_w + key_gap;
 
+                // '-'
                 canvas.draw_rounded_rect(cur_x, y, minus_w, KB_ROW_H, 16.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.0)));
                 fonts.draw_text(&mut canvas.pixmap, "-", cur_x + 38.0, y + 54.0, 24.0, theme.on_surface);
                 cur_x += minus_w + key_gap;
 
+                // '.'
                 canvas.draw_rounded_rect(cur_x, y, dot_w, KB_ROW_H, 16.0, Some(theme.surface_container_high), Some((theme.outline_variant, 1.0)));
                 fonts.draw_text(&mut canvas.pixmap, ".", cur_x + 38.0, y + 54.0, 24.0, theme.on_surface);
                 cur_x += dot_w + key_gap;
 
+                // Enter
                 canvas.draw_rounded_rect(cur_x, y, enter_w, KB_ROW_H, 16.0, Some(theme.primary), None);
                 let ent_lbl = "ENTER";
                 let ew = fonts.measure_text(ent_lbl, 21.0);
@@ -790,6 +831,7 @@ pub fn render_terminal(
             }
         }
         KeyboardMode::Symbols => {
+            // Symbols rendering
             let sym_rows = [
                 vec!['`', '~', '!', '@', '#', '$', '%', '^', '&', '*'],
                 vec!['(', ')', '-', '_', '=', '+', '[', ']', '{', '}'],
@@ -810,6 +852,7 @@ pub fn render_terminal(
                 }
             }
 
+            // Row 3: ABC toggle, symbols, DEL
             {
                 let unit_w = (CONTENT_W - (key_gap * 8.0)) / 10.0;
                 let abc_w = unit_w * 1.5;
@@ -834,6 +877,7 @@ pub fn render_terminal(
                 fonts.draw_text(&mut canvas.pixmap, "DEL", bk_x + 32.0, y + 53.0, 21.0, theme.on_surface);
             }
 
+            // Row 4: ABC, Space, Enter
             {
                 let abc_w = 140.0;
                 let enter_w = 190.0;
@@ -854,6 +898,9 @@ pub fn render_terminal(
         }
     }
 
+    // =========================================================================
+    // 6. BOTTOM DOCK (TERM_DOCK_Y .. TERM_DOCK_Y + TERM_DOCK_H)
+    // =========================================================================
     let dock_gap = 12.0;
     let dock_w = (CONTENT_W - (dock_gap * 3.0)) / 4.0;
 
@@ -873,4 +920,3 @@ pub fn render_terminal(
         fonts.draw_text(&mut canvas.pixmap, lbl, dx + (dock_w - tw) / 2.0, TERM_DOCK_Y + 66.0, 21.0, theme.on_surface);
     }
 }
-

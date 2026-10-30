@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use tiny_skia::Color;
+use tiny_skia::{Color, PixmapMut};
 
 use super::canvas::Canvas;
 use super::icons::{draw_icon, M3Icon};
@@ -59,16 +59,14 @@ pub struct InstallerState {
     pub selected_file: Option<FileEntry>,
     pub target_partition: PartitionTarget,
     pub flash_slider: SwipeSlider,
-    pub scroll_offset: usize,
-    pub last_touch_y: f32,
 }
 
 impl Default for InstallerState {
     fn default() -> Self {
         let card_w = 1040.0;
         let box_x = (1220.0 - card_w) / 2.0 + 48.0;
-        let box_w = card_w - 96.0;
-        let slider_y = 650.0 + 580.0;
+        let box_w = card_w - 96.0; // 944.0
+        let slider_y = 650.0 + 580.0; // 1230.0
         let slider_h = 130.0;
 
         let flash_slider = SwipeSlider::new(box_x, slider_y, box_w, slider_h, "Swipe to Flash >>>");
@@ -79,8 +77,6 @@ impl Default for InstallerState {
             selected_file: None,
             target_partition: PartitionTarget::InitBoot,
             flash_slider,
-            scroll_offset: 0,
-            last_touch_y: 0.0,
         };
         s.load_dir();
         s
@@ -99,21 +95,10 @@ impl InstallerState {
         false
     }
 
-    pub fn scroll_up(&mut self, amount: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
-    }
-
-    pub fn scroll_down(&mut self, amount: usize) {
-        if self.entries.len() > 15 {
-            let max_scroll = self.entries.len().saturating_sub(15);
-            self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
-        }
-    }
-
     pub fn load_dir(&mut self) {
         self.entries.clear();
-        self.scroll_offset = 0;
 
+        // If not root, add parent directory entry
         if self.current_dir.parent().is_some() && self.current_dir != Path::new("/") {
             self.entries.push(FileEntry {
                 name: ".. (Parent Directory)".to_string(),
@@ -131,6 +116,7 @@ impl InstallerState {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
 
+                // Skip hidden files
                 if name.starts_with('.') {
                     continue;
                 }
@@ -167,6 +153,7 @@ impl InstallerState {
             self.entries.extend(dirs);
             self.entries.extend(files);
         } else {
+            // If /sdcard isn't available, show empty notice
             self.entries.push(FileEntry {
                 name: "Storage not mounted or empty (/sdcard)".to_string(),
                 is_dir: false,
@@ -202,6 +189,7 @@ impl InstallerState {
         let fx = tx as f32;
         let fy = ty as f32;
 
+        // If modal confirmation is open
         if let Some(ref file_entry) = self.selected_file {
             let is_img = file_entry.name.ends_with(".img");
             let card_w = 1040.0;
@@ -212,7 +200,8 @@ impl InstallerState {
             let box_y = card_y + 190.0;
             let box_h = 210.0;
 
-            if is_img && !self.flash_slider.is_dragging && (state == TouchState::Released || state == TouchState::Pressed) {
+            // When flashing .img, partition pills are selectable
+            if is_img && (state == TouchState::Released || state == TouchState::Pressed) {
                 let part_sel_y = box_y + box_h + 20.0;
                 let pill_y = part_sel_y + 42.0;
                 let pill_h = 68.0;
@@ -240,13 +229,16 @@ impl InstallerState {
             let cancel_y = slider_y + slider_h + 25.0;
             let cancel_h = 105.0;
 
+            // Cancel Button
             if state == TouchState::Released && fx >= box_x && fx <= (box_x + box_w) && fy >= cancel_y && fy <= (cancel_y + cancel_h) {
                 self.selected_file = None;
                 self.flash_slider.reset();
                 return Some(InstallerAction::FlashCancel);
             }
 
+            // Swipe to Flash Slider
             if self.flash_slider.handle_touch(tx, ty, state) {
+                // DO NOT take selected_file here! Keep it for main.rs to read.
                 self.flash_slider.reset();
                 return Some(InstallerAction::FlashConfirm);
             }
@@ -254,39 +246,27 @@ impl InstallerState {
             return None;
         }
 
-        if state == TouchState::Pressed {
-            if self.last_touch_y > 0.0 {
-                let dy = fy - self.last_touch_y;
-                if dy < -40.0 {
-                    self.scroll_down(1);
-                    self.last_touch_y = fy;
-                } else if dy > 40.0 {
-                    self.scroll_up(1);
-                    self.last_touch_y = fy;
-                }
-            } else {
-                self.last_touch_y = fy;
-            }
-        } else if state == TouchState::Released {
-            self.last_touch_y = 0.0;
+        if state == TouchState::Released {
+            // Top Bar Back (x: 40..160, y: 70..170)
             if fx >= 40.0 && fx <= 160.0 && fy >= 70.0 && fy <= 170.0 {
                 return Some(InstallerAction::Back);
             }
 
+            // Bottom Back Pill (x: 40..340, y: 2460..2580)
             if fx >= 40.0 && fx <= 340.0 && fy >= 2460.0 && fy <= 2580.0 {
                 return Some(InstallerAction::Back);
             }
 
+            // Item rows list: y: 210..2420
             let list_start_y = 210.0;
             let row_h = 120.0;
             let row_gap = 14.0;
 
             if fy >= list_start_y && fy <= 2420.0 && fx >= 40.0 && fx <= 1180.0 {
                 let rel_y = fy - list_start_y;
-                let visible_idx = (rel_y / (row_h + row_gap)) as usize;
-                let actual_idx = self.scroll_offset + visible_idx;
-                if actual_idx < self.entries.len() {
-                    return Some(InstallerAction::ItemClick(actual_idx));
+                let idx = (rel_y / (row_h + row_gap)) as usize;
+                if idx < self.entries.len() {
+                    return Some(InstallerAction::ItemClick(idx));
                 }
             }
         }
@@ -302,93 +282,15 @@ pub fn render_installer(
     state: &InstallerState,
     pressed: Option<InstallerAction>,
 ) {
-    let screen_w = 1220.0;
-    let margin = 40.0;
-    let content_w = screen_w - (margin * 2.0);
-
-    if let Some(ref selected) = state.selected_file {
-        canvas.clear(Color::from_rgba8(14, 12, 18, 255));
-        let is_img = selected.name.ends_with(".img");
-
-        let card_w = 1040.0;
-        let card_x = (screen_w - card_w) / 2.0;
-        let card_y = 650.0;
-        let card_h = if is_img { 1180.0 } else { 1050.0 };
-
-        canvas.draw_rounded_rect(
-            card_x,
-            card_y,
-            card_w,
-            card_h,
-            48.0,
-            Some(theme.surface_container_high),
-            Some((theme.outline_variant, 2.0)),
-        );
-
-        let icon_cx = card_x + 96.0;
-        let icon_cy = card_y + 100.0;
-        canvas.draw_circle(icon_cx, icon_cy, 48.0, theme.primary_container);
-        draw_icon(&mut canvas.pixmap, M3Icon::Install, icon_cx, icon_cy, 48.0, theme.primary);
-
-        let title = if is_img { "Confirm Image Flash" } else { "Confirm Flash" };
-        let sub = if is_img { "Choose target partition and swipe to flash" } else { "Swipe slider to flash package to device" };
-        fonts.draw_text(&mut canvas.pixmap, title, icon_cx + 72.0, icon_cy - 4.0, 38.0, theme.on_surface);
-        fonts.draw_text(&mut canvas.pixmap, sub, icon_cx + 72.0, icon_cy + 34.0, 22.0, theme.on_surface_variant);
-
-        let box_y = card_y + 190.0;
-        let box_w = card_w - 96.0;
-        let box_x = card_x + 48.0;
-        let box_h = 210.0;
-        canvas.draw_rounded_rect(box_x, box_y, box_w, box_h, 32.0, Some(theme.surface_container_highest), Some((theme.outline_variant, 1.5)));
-
-        let box_title = if is_img { "Selected Image File:" } else { "Selected Package:" };
-        fonts.draw_text(&mut canvas.pixmap, box_title, box_x + 36.0, box_y + 50.0, 22.0, theme.on_surface_variant);
-        fonts.draw_text(&mut canvas.pixmap, &selected.name, box_x + 36.0, box_y + 98.0, 30.0, theme.primary);
-        fonts.draw_text(&mut canvas.pixmap, &format!("Size: {}", selected.size_str), box_x + 36.0, box_y + 144.0, 22.0, theme.on_surface);
-        fonts.draw_text(&mut canvas.pixmap, &format!("Path: {}", selected.path.display()), box_x + 36.0, box_y + 184.0, 18.0, theme.on_surface_variant);
-
-        if is_img {
-            let part_sel_y = box_y + box_h + 20.0;
-            fonts.draw_text(&mut canvas.pixmap, "Target Partition to Flash:", box_x + 8.0, part_sel_y + 24.0, 22.0, theme.on_surface);
-
-            let pill_y = part_sel_y + 42.0;
-            let pill_h = 68.0;
-            let pill_w = 225.0;
-
-            let targets = [
-                (PartitionTarget::InitBoot, box_x),
-                (PartitionTarget::Boot, box_x + 238.0),
-                (PartitionTarget::VendorBoot, box_x + 476.0),
-                (PartitionTarget::Dtbo, box_x + 714.0),
-            ];
-
-            for (target, px) in targets {
-                let is_sel = state.target_partition == target;
-                let bg = if is_sel { theme.primary } else { theme.surface_container };
-                let fg = if is_sel { theme.on_primary } else { theme.on_surface };
-                let border = if is_sel { None } else { Some((theme.outline_variant, 1.5)) };
-
-                canvas.draw_pill(px, pill_y, pill_w, pill_h, bg, border);
-                let label = target.display_label();
-                let lw = fonts.measure_text(label, 22.0);
-                fonts.draw_text(&mut canvas.pixmap, label, px + (pill_w - lw) / 2.0, pill_y + 42.0, 22.0, fg);
-            }
-        }
-
-        state.flash_slider.render(canvas, theme, fonts);
-
-        let cancel_y = state.flash_slider.y + state.flash_slider.height + 25.0;
-        let cancel_h = 105.0;
-        canvas.draw_pill(box_x, cancel_y, box_w, cancel_h, theme.surface_container, Some((theme.outline_variant, 1.5)));
-        let cancel_lbl = "Cancel";
-        let cw = fonts.measure_text(cancel_lbl, 28.0);
-        fonts.draw_text(&mut canvas.pixmap, cancel_lbl, box_x + (box_w - cw) / 2.0, cancel_y + 64.0, 28.0, theme.on_surface);
-
-        return;
-    }
-
     canvas.clear(theme.background);
 
+    let screen_w = 1220.0;
+    let margin = 40.0;
+    let content_w = screen_w - (margin * 2.0); // 1140.0
+
+    // =========================================================================
+    // 1. TOP APP BAR
+    // =========================================================================
     let back_cx = margin + 44.0;
     let back_cy = 115.0;
     let is_back_pressed = pressed == Some(InstallerAction::Back);
@@ -425,15 +327,17 @@ pub fn render_installer(
         theme.primary,
     );
 
+    // =========================================================================
+    // 2. FILE LIST ROWS
+    // =========================================================================
     let list_start_y = 210.0;
     let row_h = 120.0;
     let row_gap = 14.0;
     let max_visible = 15;
 
-    for (i, entry) in state.entries.iter().skip(state.scroll_offset).take(max_visible).enumerate() {
+    for (i, entry) in state.entries.iter().take(max_visible).enumerate() {
         let ry = list_start_y + (i as f32) * (row_h + row_gap);
-        let actual_idx = state.scroll_offset + i;
-        let is_row_pressed = pressed == Some(InstallerAction::ItemClick(actual_idx));
+        let is_row_pressed = pressed == Some(InstallerAction::ItemClick(i));
 
         let bg = if is_row_pressed {
             theme.primary_container
@@ -451,6 +355,7 @@ pub fn render_installer(
             Some((theme.outline_variant, 1.0)),
         );
 
+        // Icon
         let icon_cx = margin + 60.0;
         let icon_cy = ry + (row_h / 2.0);
         let icon = if entry.is_dir {
@@ -471,6 +376,7 @@ pub fn render_installer(
 
         draw_icon(&mut canvas.pixmap, icon, icon_cx, icon_cy, 40.0, icon_color);
 
+        // Title
         let text_x = icon_cx + 56.0;
         let title_y = ry + 54.0;
         let name_trimmed = if entry.name.len() > 40 {
@@ -488,6 +394,7 @@ pub fn render_installer(
             theme.on_surface,
         );
 
+        // Subtitle (size / folder)
         let sub_y = ry + 94.0;
         fonts.draw_text(
             &mut canvas.pixmap,
@@ -499,6 +406,9 @@ pub fn render_installer(
         );
     }
 
+    // =========================================================================
+    // 3. BOTTOM BAR
+    // =========================================================================
     let dock_y = 2460.0;
     let dock_h = 110.0;
     let btn_w = 280.0;
@@ -515,5 +425,101 @@ pub fn render_installer(
     let w = fonts.measure_text(lbl, 26.0);
     fonts.draw_text(&mut canvas.pixmap, lbl, margin + (btn_w - w) / 2.0, dock_y + 64.0, 26.0, theme.on_surface);
 
+    // =========================================================================
+    // 4. CONFIRMATION MODAL WITH INTERACTIVE SWIPESLIDER
+    // =========================================================================
+    if let Some(ref selected) = state.selected_file {
+        let is_img = selected.name.ends_with(".img");
 
+        // Scrim
+        let scrim = Color::from_rgba8(0, 0, 0, 195);
+        let mut sp = tiny_skia::Paint::default();
+        sp.set_color(scrim);
+        canvas.pixmap.fill_rect(
+            tiny_skia::Rect::from_xywh(0.0, 0.0, 1220.0, 2712.0).unwrap(),
+            &sp,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+
+        // Dialog Card
+        let card_w = 1040.0;
+        let card_x = (screen_w - card_w) / 2.0;
+        let card_y = 650.0;
+        let card_h = if is_img { 1180.0 } else { 1050.0 };
+
+        canvas.draw_rounded_rect(
+            card_x,
+            card_y,
+            card_w,
+            card_h,
+            48.0,
+            Some(theme.surface_container_high),
+            Some((theme.outline_variant, 2.0)),
+        );
+
+        // Header
+        let icon_cx = card_x + 96.0;
+        let icon_cy = card_y + 100.0;
+        canvas.draw_circle(icon_cx, icon_cy, 48.0, theme.primary_container);
+        draw_icon(&mut canvas.pixmap, M3Icon::Install, icon_cx, icon_cy, 48.0, theme.primary);
+
+        let title = if is_img { "Confirm Image Flash" } else { "Confirm Flash" };
+        let sub = if is_img { "Choose target partition and swipe to flash" } else { "Swipe slider to flash package to device" };
+        fonts.draw_text(&mut canvas.pixmap, title, icon_cx + 72.0, icon_cy - 4.0, 38.0, theme.on_surface);
+        fonts.draw_text(&mut canvas.pixmap, sub, icon_cx + 72.0, icon_cy + 34.0, 22.0, theme.on_surface_variant);
+
+        // Package / Image Box Info
+        let box_y = card_y + 190.0;
+        let box_w = card_w - 96.0;
+        let box_x = card_x + 48.0;
+        let box_h = 210.0;
+        canvas.draw_rounded_rect(box_x, box_y, box_w, box_h, 32.0, Some(theme.surface_container_highest), Some((theme.outline_variant, 1.5)));
+
+        let box_title = if is_img { "Selected Image File:" } else { "Selected Package:" };
+        fonts.draw_text(&mut canvas.pixmap, box_title, box_x + 36.0, box_y + 50.0, 22.0, theme.on_surface_variant);
+        fonts.draw_text(&mut canvas.pixmap, &selected.name, box_x + 36.0, box_y + 98.0, 30.0, theme.primary);
+        fonts.draw_text(&mut canvas.pixmap, &format!("Size: {}", selected.size_str), box_x + 36.0, box_y + 144.0, 22.0, theme.on_surface);
+        fonts.draw_text(&mut canvas.pixmap, &format!("Path: {}", selected.path.display()), box_x + 36.0, box_y + 184.0, 18.0, theme.on_surface_variant);
+
+        // If flashing .img, render partition selector pills
+        if is_img {
+            let part_sel_y = box_y + box_h + 20.0;
+            fonts.draw_text(&mut canvas.pixmap, "Target Partition to Flash:", box_x + 8.0, part_sel_y + 24.0, 22.0, theme.on_surface);
+
+            let pill_y = part_sel_y + 42.0;
+            let pill_h = 68.0;
+            let pill_w = 225.0;
+
+            let targets = [
+                (PartitionTarget::InitBoot, box_x),
+                (PartitionTarget::Boot, box_x + 238.0),
+                (PartitionTarget::VendorBoot, box_x + 476.0),
+                (PartitionTarget::Dtbo, box_x + 714.0),
+            ];
+
+            for (target, px) in targets {
+                let is_sel = state.target_partition == target;
+                let bg = if is_sel { theme.primary } else { theme.surface_container };
+                let fg = if is_sel { theme.on_primary } else { theme.on_surface };
+                let border = if is_sel { None } else { Some((theme.outline_variant, 1.5)) };
+
+                canvas.draw_pill(px, pill_y, pill_w, pill_h, bg, border);
+                let label = target.display_label();
+                let lw = fonts.measure_text(label, 22.0);
+                fonts.draw_text(&mut canvas.pixmap, label, px + (pill_w - lw) / 2.0, pill_y + 42.0, 22.0, fg);
+            }
+        }
+
+        // Interactive SwipeSlider for Flash confirmation
+        state.flash_slider.render(canvas, theme, fonts);
+
+        // Cancel Button
+        let cancel_y = state.flash_slider.y + state.flash_slider.height + 25.0;
+        let cancel_h = 105.0;
+        canvas.draw_pill(box_x, cancel_y, box_w, cancel_h, theme.surface_container, Some((theme.outline_variant, 1.5)));
+        let cancel_lbl = "Cancel";
+        let cw = fonts.measure_text(cancel_lbl, 28.0);
+        fonts.draw_text(&mut canvas.pixmap, cancel_lbl, box_x + (box_w - cw) / 2.0, cancel_y + 64.0, 28.0, theme.on_surface);
+    }
 }

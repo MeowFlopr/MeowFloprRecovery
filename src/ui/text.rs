@@ -19,6 +19,7 @@ impl FontRenderer {
         Self::default()
     }
 
+    /// Renders text with antialiasing into the target pixmap
     pub fn draw_text(
         &self,
         pixmap: &mut PixmapMut,
@@ -84,6 +85,7 @@ impl FontRenderer {
         pen_x
     }
 
+    /// Measures the horizontal width of text in pixels
     pub fn measure_text(&self, text: &str, size_px: f32) -> f32 {
         let mut width = 0.0;
         for ch in text.chars() {

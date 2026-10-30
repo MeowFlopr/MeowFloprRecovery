@@ -4,6 +4,7 @@ pub mod backup;
 pub mod canvas;
 pub mod dashboard;
 pub mod decrypt;
+pub mod fastbootd;
 pub mod i18n;
 pub mod icons;
 pub mod installer;

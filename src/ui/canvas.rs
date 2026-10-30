@@ -1,5 +1,5 @@
 use tiny_skia::{
-    Color, FillRule, Paint, PathBuilder, PixmapMut, Transform,
+    Color, FillRule, Paint, PathBuilder, PixmapMut, Rect, Transform,
 };
 
 pub struct Canvas<'a> {
@@ -15,6 +15,7 @@ impl<'a> Canvas<'a> {
         self.pixmap.fill(color);
     }
 
+    /// Draws a rounded rectangle with antialiased corners
     pub fn draw_rounded_rect(
         &mut self,
         x: f32,
@@ -28,6 +29,7 @@ impl<'a> Canvas<'a> {
         let r = radius.min(w / 2.0).min(h / 2.0);
         let mut pb = PathBuilder::new();
 
+        // Build rounded rect path
         pb.move_to(x + r, y);
         pb.line_to(x + w - r, y);
         pb.quad_to(x + w, y, x + w, y + r);
@@ -73,6 +75,7 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Draws a full Material 3 Pill
     pub fn draw_pill(
         &mut self,
         x: f32,
@@ -86,6 +89,7 @@ impl<'a> Canvas<'a> {
         self.draw_rounded_rect(x, y, w, h, radius, Some(fill), stroke);
     }
 
+    /// Draws a circle
     pub fn draw_circle(&mut self, cx: f32, cy: f32, r: f32, fill: Color) {
         let mut pb = PathBuilder::new();
         pb.push_circle(cx, cy, r);
@@ -103,19 +107,22 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// Draws an Expressive thick rounded progress bar
     pub fn draw_progress_bar(
         &mut self,
         x: f32,
         y: f32,
         w: f32,
         h: f32,
-        progress: f32,
+        progress: f32, // 0.0 .. 1.0
         bg_color: Color,
         fg_color: Color,
     ) {
         let radius = h / 2.0;
+        // Background track
         self.draw_rounded_rect(x, y, w, h, radius, Some(bg_color), None);
 
+        // Progress fill
         let fill_w = (w * progress.clamp(0.0, 1.0)).max(h);
         self.draw_rounded_rect(x, y, fill_w, h, radius, Some(fg_color), None);
     }
