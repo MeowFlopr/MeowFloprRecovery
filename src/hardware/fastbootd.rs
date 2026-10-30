@@ -99,7 +99,17 @@ impl FastbootServer {
     }
 
     fn setup_usb_gadget() {
+        if Path::new("/system/bin/setprop").exists() {
+            let _ = Command::new("/system/bin/setprop")
+                .arg("sys.usb.config")
+                .arg("none")
+                .status();
+        }
+
         let _ = fs::write("/config/usb_gadget/g1/UDC", "none\n");
+        let _ = fs::remove_file("/config/usb_gadget/g1/configs/b.1/f1");
+        thread::sleep(Duration::from_millis(100));
+
         let _ = fs::create_dir_all("/config/usb_gadget/g1/functions/ffs.fastboot");
         let _ = fs::create_dir_all("/dev/usb-ffs/fastboot");
 
@@ -117,7 +127,7 @@ impl FastbootServer {
         }
 
         let _ = fs::write("/config/usb_gadget/g1/idVendor", "0x18D1\n");
-        let _ = fs::write("/config/usb_gadget/g1/idProduct", "0x4EE0\n");
+        let _ = fs::write("/config/usb_gadget/g1/idProduct", "0xD00D\n");
         let _ = fs::write(
             "/config/usb_gadget/g1/configs/b.1/strings/0x409/configuration",
             "fastboot\n",
@@ -125,9 +135,7 @@ impl FastbootServer {
 
         let link_src = "/config/usb_gadget/g1/functions/ffs.fastboot";
         let link_dst = "/config/usb_gadget/g1/configs/b.1/f1";
-        if !Path::new(link_dst).exists() {
-            let _ = std::os::unix::fs::symlink(link_src, link_dst);
-        }
+        let _ = std::os::unix::fs::symlink(link_src, link_dst);
 
         if let Ok(entries) = fs::read_dir("/sys/class/udc") {
             for entry in entries.flatten() {
@@ -150,6 +158,26 @@ impl FastbootServer {
         let _ = fs::write("/config/usb_gadget/g1/UDC", "none\n");
         let _ = fs::remove_file("/config/usb_gadget/g1/configs/b.1/f1");
 
+        let _ = fs::write("/config/usb_gadget/g1/idVendor", "0x18D1\n");
+        let _ = fs::write("/config/usb_gadget/g1/idProduct", "0xD001\n");
+        let _ = fs::write(
+            "/config/usb_gadget/g1/configs/b.1/strings/0x409/configuration",
+            "recovery\n",
+        );
+
+        let link_src = "/config/usb_gadget/g1/functions/ffs.adb";
+        let link_dst = "/config/usb_gadget/g1/configs/b.1/f1";
+        let _ = std::os::unix::fs::symlink(link_src, link_dst);
+
+        if let Ok(entries) = fs::read_dir("/sys/class/udc") {
+            for entry in entries.flatten() {
+                if let Ok(name) = entry.file_name().into_string() {
+                    let _ = fs::write("/config/usb_gadget/g1/UDC", format!("{}\n", name.trim()));
+                    break;
+                }
+            }
+        }
+
         if Path::new("/system/bin/setprop").exists() {
             let _ = Command::new("/system/bin/setprop")
                 .arg("sys.usb.config")
@@ -161,8 +189,19 @@ impl FastbootServer {
     fn worker_loop(status: Arc<Mutex<FastbootStatus>>, stop_signal: Arc<AtomicBool>) {
         Self::setup_usb_gadget();
 
+        let is_already_running = fs::read_dir("/proc")
+            .map(|entries| {
+                entries.flatten().any(|e| {
+                    let comm_path = e.path().join("comm");
+                    fs::read_to_string(comm_path)
+                        .map(|s| s.trim() == "fastbootd")
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
         let mut child_proc: Option<Child> = None;
-        if Path::new("/system/bin/fastbootd").exists() {
+        if !is_already_running && Path::new("/system/bin/fastbootd").exists() {
             if let Ok(child) = Command::new("/system/bin/fastbootd")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -173,6 +212,11 @@ impl FastbootServer {
                     st.logs.push("AOSP fastbootd service spawned.".to_string());
                     st.status_text = "FastbootD AOSP engine running.".to_string();
                 }
+            }
+        } else if is_already_running {
+            if let Ok(mut st) = status.lock() {
+                st.logs.push("Init fastbootd service detected.".to_string());
+                st.status_text = "FastbootD init service active.".to_string();
             }
         }
 
