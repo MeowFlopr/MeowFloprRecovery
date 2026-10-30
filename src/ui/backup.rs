@@ -127,6 +127,11 @@ impl BackupState {
         self.partitions.iter().filter(|p| p.is_checked).map(|p| p.size_mb).sum()
     }
 
+    pub fn reset_sliders(&mut self) {
+        self.backup_slider.reset();
+        self.restore_slider.reset();
+    }
+
     pub fn scan_archives(&mut self) {
         self.archives.clear();
         let paths = [
@@ -200,9 +205,11 @@ impl BackupState {
             let tab_w = (content_w - 16.0) / 2.0;
             if fx >= margin && fx <= margin + tab_w {
                 self.current_tab = BackupTab::Backup;
+                self.reset_sliders();
                 return Some(BackupAction::SelectTab(BackupTab::Backup));
             } else if fx >= margin + tab_w + 16.0 && fx <= margin + tab_w * 2.0 + 16.0 {
                 self.current_tab = BackupTab::Restore;
+                self.reset_sliders();
                 self.scan_archives();
                 return Some(BackupAction::SelectTab(BackupTab::Restore));
             }
@@ -246,6 +253,7 @@ impl BackupState {
             }
 
             if self.backup_slider.handle_touch(tx, ty, state) {
+                self.backup_slider.reset();
                 return Some(BackupAction::ConfirmBackup);
             }
         }
@@ -260,12 +268,14 @@ impl BackupState {
                     let cy = start_y + (i as f32) * (item_h + gap);
                     if fx >= margin && fx <= 1220.0 - margin && fy >= cy && fy <= cy + item_h {
                         self.selected_archive_idx = Some(i);
+                        self.restore_slider.reset();
                         return Some(BackupAction::SelectArchive(i));
                     }
                 }
             }
 
             if self.selected_archive_idx.is_some() && self.restore_slider.handle_touch(tx, ty, state) {
+                self.restore_slider.reset();
                 return Some(BackupAction::ConfirmRestore);
             }
         }

@@ -142,7 +142,7 @@ pub fn setup_dm_default_key(key_hex: &str) -> Result<(), std::io::Error> {
 
     let mut buf = vec![0u8; total_size];
 
-    let io_load = DmIoctl::new(DM_DEV_NAME, DM_READONLY_FLAG, total_size);
+    let io_load = DmIoctl::new(DM_DEV_NAME, 0, total_size);
     let mut spec = DmTargetSpec::default();
     spec.sector_start = 0;
     spec.length = sectors;

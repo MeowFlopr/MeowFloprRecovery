@@ -298,6 +298,20 @@ pub fn dump_partition(src_path: &Path, dest_path: &Path, max_bytes: Option<u64>)
     Ok(total)
 }
 
+fn redraw_console(
+    display: &mut Option<platform::drm::DrmDisplay>,
+    pixmap: &mut Pixmap,
+    theme: &ui::theme::M3Theme,
+    fonts: &ui::text::FontRenderer,
+    state: &ui::action_console::ActionConsoleState,
+) {
+    let mut canvas = ui::canvas::Canvas::new(pixmap.as_mut());
+    ui::action_console::render_action_console(&mut canvas, theme, fonts, state, None);
+    if let Some(ref mut disp) = display {
+        disp.blit_and_flip(pixmap);
+    }
+}
+
 fn main() {
     println!("=====================================================");
     println!("   MeowFloprRecovery (MRR) - 100% Native Pure Rust   ");
@@ -624,6 +638,7 @@ fn main() {
                                         }
                                         ActionTarget::Backup => {
                                             println!("[MRR-UI] Opening Backup & Restore screen...");
+                                            backup_state.reset_sliders();
                                             backup_state.scan_archives();
                                             current_screen = CurrentScreen::Backup;
                                             dirty = true;
@@ -824,6 +839,7 @@ fn main() {
                                 }
                                 InstallerAction::FlashConfirm => {
                                     println!("[MRR-INSTALL] Flash confirmed via SwipeSlider!");
+                                    current_screen = CurrentScreen::ActionConsole;
                                     let sel_file = installer_state.selected_file.take();
                                     let target_part = installer_state.target_partition;
 
@@ -892,6 +908,7 @@ fn main() {
                                 }
                                 WipeAction::Confirmed(tab) => {
                                     println!("[MRR-WIPE] Action confirmed via SwipeSlider: {:?}", tab);
+                                    current_screen = CurrentScreen::ActionConsole;
                                     match tab {
                                         WipeTab::AdvancedWipe => {
                                             action_console_state.start("Advanced Wipe (Selective)");
@@ -1007,6 +1024,7 @@ fn main() {
                         if let Some(action) = backup_state.handle_touch(ev.x, ev.y, ev.state) {
                             match action {
                                 BackupAction::Back => {
+                                    backup_state.reset_sliders();
                                     current_screen = CurrentScreen::Dashboard;
                                     dirty = true;
                                 }
@@ -1019,62 +1037,120 @@ fn main() {
                                     dirty = true;
                                 }
                                 BackupAction::ConfirmBackup => {
-                                    let total_mb = backup_state.total_selected_size_mb();
+                                    backup_state.reset_sliders();
+                                    current_screen = CurrentScreen::ActionConsole;
                                     action_console_state.start("Partition Backup (Snapshot)");
-                                    action_console_state.set_step("Creating target directory /sdcard/MRR/BACKUPS...", 0.10);
+                                    redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
 
-                                    let timestamp = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_secs())
-                                        .unwrap_or(0);
-                                    let target_dir = PathBuf::from(format!("/sdcard/MRR/BACKUPS/backup_degas_{}", timestamp));
-                                    let _ = std::fs::create_dir_all(&target_dir);
+                                    let target_base_dir = match backup_state.storage_target {
+                                        ui::backup::StorageTarget::Internal => PathBuf::from("/sdcard/MRR/BACKUPS"),
+                                        ui::backup::StorageTarget::UsbOtg => {
+                                            if Path::new("/usb_otg").exists() {
+                                                PathBuf::from("/usb_otg/MRR/BACKUPS")
+                                            } else {
+                                                PathBuf::from("/mnt/media_rw/usb_otg/MRR/BACKUPS")
+                                            }
+                                        }
+                                    };
 
-                                    let active_parts: Vec<_> = backup_state.partitions.iter().filter(|p| p.is_checked).cloned().collect();
-                                    let num_parts = active_parts.len().max(1);
-                                    let mut sha256_entries = Vec::new();
+                                    action_console_state.set_step(&format!("Preparing target directory {:?}...", target_base_dir), 0.10);
+                                    redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
 
-                                    for (i, part) in active_parts.iter().enumerate() {
-                                        let prog = 0.20 + (i as f32 / num_parts as f32) * 0.70;
-                                        action_console_state.set_step(&format!("Dumping {} ({} MB)...", part.name, part.size_mb), prog);
-                                        let f_dest = target_dir.join(format!("{}.img", part.id));
+                                    if let Err(e) = std::fs::create_dir_all(&target_base_dir) {
+                                        action_console_state.add_log(&format!("[ERR] Failed to create backup directory: {}", e));
+                                        action_console_state.add_log("[!] Internal storage (/sdcard) is read-only or not mounted.");
+                                        action_console_state.add_log("[!] Ensure /data is decrypted or connect USB-OTG drive.");
+                                        action_console_state.finish(false, "Storage destination is not writable!");
+                                        redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                        dirty = true;
+                                    } else {
+                                        let timestamp = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0);
+                                        let target_dir = target_base_dir.join(format!("backup_degas_{}", timestamp));
+                                        if let Err(e) = std::fs::create_dir_all(&target_dir) {
+                                            action_console_state.add_log(&format!("[ERR] Cannot create backup archive folder: {}", e));
+                                            action_console_state.finish(false, "Failed to create archive directory!");
+                                            redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                            dirty = true;
+                                        } else {
+                                            let active_parts: Vec<_> = backup_state.partitions.iter().filter(|p| p.is_checked).cloned().collect();
+                                            let num_parts = active_parts.len().max(1);
+                                            let mut sha256_entries = Vec::new();
+                                            let mut dumped_count = 0;
+                                            let mut total_dumped_bytes = 0u64;
 
-                                        if let Some(src_blk) = resolve_partition_block(part.id, &slot) {
-                                            action_console_state.add_log(&format!("[+] Reading block source: {:?}", src_blk));
-                                            let blk_size = get_block_device_size(&src_blk);
-                                            let limit = blk_size.or(Some(part.size_mb * 1024 * 1024));
-                                            match dump_partition(&src_blk, &f_dest, limit) {
-                                                Ok(b) => {
-                                                    action_console_state.add_log(&format!("[OK] Dumped {:.1} MB to {:?}", b as f32 / (1024.0 * 1024.0), f_dest));
-                                                    if backup_state.generate_sha256 {
-                                                        if let Ok(hash) = compute_file_sha256(&f_dest) {
-                                                            sha256_entries.push(format!("{}  {}.img", hash, part.id));
+                                            for (i, part) in active_parts.iter().enumerate() {
+                                                let prog = 0.15 + (i as f32 / num_parts as f32) * 0.70;
+                                                action_console_state.set_step(&format!("Dumping {} ({} MB)...", part.name, part.size_mb), prog);
+                                                redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+
+                                                let sub_parts: Vec<&str> = if part.id == "nvram" {
+                                                    vec!["nvram", "nvdata", "nvcfg"]
+                                                } else {
+                                                    vec![part.id]
+                                                };
+
+                                                for sub_id in sub_parts {
+                                                    let f_dest = target_dir.join(format!("{}.img", sub_id));
+                                                    if let Some(src_blk) = resolve_partition_block(sub_id, &slot) {
+                                                        action_console_state.add_log(&format!("[+] Reading block source: {:?}", src_blk));
+                                                        redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                                        let blk_size = get_block_device_size(&src_blk);
+                                                        let limit = blk_size.or(Some(part.size_mb * 1024 * 1024));
+                                                        match dump_partition(&src_blk, &f_dest, limit) {
+                                                            Ok(b) => {
+                                                                action_console_state.add_log(&format!("[OK] Dumped {:.1} MB to {:?}", b as f32 / (1024.0 * 1024.0), f_dest));
+                                                                dumped_count += 1;
+                                                                total_dumped_bytes += b;
+                                                                redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                                                if backup_state.generate_sha256 {
+                                                                    if let Ok(hash) = compute_file_sha256(&f_dest) {
+                                                                        sha256_entries.push(format!("{}  {}.img", hash, sub_id));
+                                                                    }
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                action_console_state.add_log(&format!("[ERR] Dump failed for {}: {}", sub_id, e));
+                                                                redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                                            }
                                                         }
+                                                    } else {
+                                                        action_console_state.add_log(&format!("[WARN] Partition block for {} not found, skipped", sub_id));
+                                                        redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
                                                     }
                                                 }
-                                                Err(e) => {
-                                                    action_console_state.add_log(&format!("[ERR] Dump failed: {}", e));
-                                                }
                                             }
-                                        } else {
-                                            action_console_state.add_log(&format!("[WARN] Partition block for {} not found, skipped", part.id));
+
+                                            if backup_state.generate_sha256 && !sha256_entries.is_empty() {
+                                                action_console_state.set_step("Writing SHA256 integrity digest...", 0.95);
+                                                redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                                let sha_file = target_dir.join("sha256.txt");
+                                                let _ = std::fs::write(&sha_file, sha256_entries.join("\n"));
+                                                action_console_state.add_log(&format!("[+] SHA256 digest saved to {:?}", sha_file));
+                                            }
+
+                                            if dumped_count > 0 {
+                                                let meta_content = format!("name=backup_degas_{}\ntimestamp={}\nslot={}\ncount={}\nbytes={}\n", timestamp, timestamp, slot, dumped_count, total_dumped_bytes);
+                                                let _ = std::fs::write(target_dir.join("backup.meta"), meta_content);
+                                                let gb = total_dumped_bytes as f32 / (1024.0 * 1024.0 * 1024.0);
+                                                action_console_state.finish(true, &format!("Backup of {} partitions ({:.2} GB) completed successfully!", dumped_count, gb));
+                                            } else {
+                                                action_console_state.finish(false, "No partitions were successfully backed up! Check storage permissions.");
+                                            }
+
+                                            backup_state.scan_archives();
+                                            redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
+                                            dirty = true;
                                         }
                                     }
-
-                                    if backup_state.generate_sha256 && !sha256_entries.is_empty() {
-                                        action_console_state.set_step("Writing SHA256 integrity digest...", 0.95);
-                                        let sha_file = target_dir.join("sha256.txt");
-                                        let _ = std::fs::write(&sha_file, sha256_entries.join("\n"));
-                                        action_console_state.add_log(&format!("[+] SHA256 digest saved to {:?}", sha_file));
-                                    }
-
-                                    action_console_state.finish(true, &format!("Backup of {:.2} GB completed successfully!", total_mb as f32 / 1024.0));
-                                    backup_state.scan_archives();
-                                    current_screen = CurrentScreen::ActionConsole;
-                                    dirty = true;
                                 }
                                 BackupAction::ConfirmRestore => {
+                                    backup_state.reset_sliders();
+                                    current_screen = CurrentScreen::ActionConsole;
                                     action_console_state.start("Restore Partition Snapshot");
+                                    redraw_console(&mut display, &mut pixmap, &theme, &fonts, &action_console_state);
                                     if let Some(archive_idx) = backup_state.selected_archive_idx {
                                         if archive_idx < backup_state.archives.len() {
                                             let arch = &backup_state.archives[archive_idx];
@@ -1288,6 +1364,11 @@ fn main() {
                                 if release_hit == Some(target) {
                                     match target {
                                         ActionConsoleTarget::BackToDashboard => {
+                                            backup_state.reset_sliders();
+                                            wipe_state.adv_slider.reset();
+                                            wipe_state.reset_slider.reset();
+                                            wipe_state.format_slider.reset();
+                                            installer_state.flash_slider.reset();
                                             current_screen = CurrentScreen::Dashboard;
                                             dirty = true;
                                         }
